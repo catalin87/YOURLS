@@ -2,22 +2,21 @@ name: PR to Markdown
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 jobs:
   convert-pr:
     runs-on: ubuntu-latest
-    
     permissions:
-      contents: write
+      contents: read
       pull-requests: read
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate PR Markdown Report
+      - name: Generate PR Markdown Report & Raw Diff
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -26,31 +25,25 @@ jobs:
             PR_NUMBER=$(gh pr list --limit 1 --json number --jq '.[0].number')
           fi
 
-          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
-            echo "No active PR found."
-            exit 0
-          fi
-
-          echo "Generating report for PR #$PR_NUMBER..."
-
-          # Generăm fișierul Markdown
+          # 1. Raport Markdown cu fișiere modificate
           echo "# PR #$PR_NUMBER Report" > output.md
           echo "" >> output.md
-          
-          # Extragem detaliile PR-ului și fișierele modificate direct din JSON
           gh pr view "$PR_NUMBER" --json title,body,author,url,files --jq '
             "## " + .title + "\n\n" +
-            "**Author:** " + .author.login + "\n\n" +
+            "**Author:** @" + .author.login + "\n\n" +
             "**URL:** " + .url + "\n\n" +
             "### Description\n" + (.body // "No description") + "\n\n" +
-            "### Modified Files\n" +
+            "### Changed Files (" + (.files | length | tostring) + ")\n" +
             ([.files[].path] | map("- `" + . + "`") | join("\n"))
           ' >> output.md
 
-      - name: Commit and push output.md safely
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add output.md
-          git diff --staged --quiet || git commit -m "docs: update PR report for #$PR_NUMBER"
-          git push
+          # 2. Diff-ul complet în format git patch / diff
+          gh pr diff "$PR_NUMBER" > changes.diff
+
+      - name: Upload Markdown and Diff Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-diff-export
+          path: |
+            output.md
+            changes.diff
