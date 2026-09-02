@@ -17,10 +17,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run PR to MD action
-        uses: ryohidaka/action-pr-to-md@main
+      - name: Generate PR List
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "<!-- PR-LIST:START -->" > output.md
+          
+          # Extragem PR-urile direct din repository-ul curent folosind GitHub CLI
+          gh pr list --state all --limit 50 --json number,title,url,state,author | node -e '
+            const fs = require("fs");
+            const prs = JSON.parse(fs.readFileSync(0, "utf-8"));
+            
+            let markdown = "\n";
+            if (prs.length === 0) {
+              markdown += "No pull requests found.\n";
+            } else {
+              prs.forEach(pr => {
+                markdown += `- [${pr.state}] #${pr.number} **${pr.title}** (${pr.url}) - *${pr.author.login}*\n`;
+              });
+            }
+            markdown += "\n<!-- PR-LIST:END -->";
+            
+            let fileContent = fs.readFileSync("output.md", "utf-8");
+            fileContent = fileContent.replace(/<!-- PR-LIST:START -->[\s\S]*<!-- PR-LIST:END -->/, "<!-- PR-LIST:START -->" + markdown);
+            fs.writeFileSync("output.md", fileContent);
+          '
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          user_name: 'catalin87'
-          output_file_path: 'output.md'
-          since: '2024-01-01'
-          # Am scos linia cu states: 'open, merged, closed' care strica interogarea
+          commit_message: "docs: update PR list automatically"
+          file_pattern: output.md
