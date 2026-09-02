@@ -8,7 +8,6 @@ jobs:
   convert-pr:
     runs-on: ubuntu-latest
     
-    # Este important să oferi permisiuni de scriere dacă acțiunea face commit automat
     permissions:
       contents: write
       pull-requests: read
@@ -19,6 +18,6 @@ jobs:
 
       - name: Run PR to MD action
         uses: ryohidaka/action-pr-to-md@main
-        # Aici poți adăuga parametri suplimentari dacă acțiunea îi cere (verifică secțiunea "inputs" din action.yml)
-        # with:
-        #   param_nume: valoare
+        with:
+          user_name: 'catalin87' # Pune username-ul tău de GitHub
+          github_token: ${{ secrets.GITHUB_TOKEN }}
