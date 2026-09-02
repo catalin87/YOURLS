@@ -3,6 +3,7 @@ name: PR to Markdown
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
+  workflow_dispatch: # Îți permite să o rulezi și manual din tab-ul Actions
 
 jobs:
   convert-pr:
@@ -19,5 +20,5 @@ jobs:
       - name: Run PR to MD action
         uses: ryohidaka/action-pr-to-md@main
         with:
-          user_name: 'catalin87' # Pune username-ul tău de GitHub
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          user_name: 'catalin87'
+          output_file_path: 'output.md'
