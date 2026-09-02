@@ -22,7 +22,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          # Dacă workflow-ul e rulat manual, luăm cel mai recent PR, altfel folosیم numărul PR-ului curent
           if [ -z "$PR_NUMBER" ]; then
             PR_NUMBER=$(gh pr list --limit 1 --json number --jq '.[0].number')
           fi
@@ -34,18 +33,19 @@ jobs:
 
           echo "Generating report for PR #$PR_NUMBER..."
 
-          # Creăm fișierul Markdown cu detaliile PR-ului și fișierele modificate (diff/file list)
+          # Generăm fișierul Markdown
           echo "# PR #$PR_NUMBER Report" > output.md
           echo "" >> output.md
           
-          # Luăm titlul, corp și autorul
-          gh pr view "$PR_NUMBER" --json title,body,author,url --jq '"## " + .title + "\n\n**Author:** " + .author.login + "\n\n**URL:** " + .url + "\n\n### Description\n" + (.body // "No description") + "\n\n"' >> output.md
-
-          # Adăugăm lista fișierelor modificate și diff-ul pe scurt
-          echo "### Modified Files" >> output.md
-          echo "\`\`\`" >> output.md
-          gh pr diff "$PR_NUMBER" --stat >> output.md
-          echo "\`\`\`" >> output.md
+          # Extragem detaliile PR-ului și fișierele modificate direct din JSON
+          gh pr view "$PR_NUMBER" --json title,body,author,url,files --jq '
+            "## " + .title + "\n\n" +
+            "**Author:** " + .author.login + "\n\n" +
+            "**URL:** " + .url + "\n\n" +
+            "### Description\n" + (.body // "No description") + "\n\n" +
+            "### Modified Files\n" +
+            ([.files[].path] | map("- `" + . + "`") | join("\n"))
+          ' >> output.md
 
       - name: Commit and push output.md safely
         run: |
