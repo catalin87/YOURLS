@@ -301,7 +301,20 @@ yourls_table_tbody_start();
 
 // Main Query
 $where = yourls_apply_filter( 'admin_list_where', $where );
-$url_results = yourls_get_db('read-admin_index')->fetchObjects( "SELECT * FROM `$table_url` WHERE 1=1 {$where['sql']} ORDER BY `$sort_by` $sort_order LIMIT $offset, $perpage;", $where['binds'] );
+$ydb   = yourls_get_db('read-admin_index');
+
+/* $sort_by is whitelisted by AdminParams::get_sort_by() and $sort_order is either 'asc' or 'desc',
+ * so both are safe to place in the ORDER BY clause. The table name is quoted, and every value in
+ * $where['sql'] is bound through $where['binds']. */
+$main_query = $ydb->query_builder()
+                  ->select('*')
+                  ->from($ydb->table($table_url))
+                  ->where('1=1 ' . $where['sql'])
+                  ->orderBy($ydb->quote_identifier($sort_by), $sort_order)
+                  ->setFirstResult((int)$offset)
+                  ->setMaxResults((int)$perpage);
+
+$url_results = $ydb->fetchObjects( $main_query->getSQL(), $where['binds'] );
 $found_rows = false;
 if( $url_results ) {
     $found_rows = true;

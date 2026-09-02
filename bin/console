@@ -1,0 +1,40 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * YOURLS command line interface.
+ *
+ * Usage:
+ *   php bin/console list                 # show all commands
+ *   php bin/console yourls:install       # install YOURLS (creates tables via Doctrine migrations)
+ *   php bin/console migrations:status    # inspect the migration state
+ *   php bin/console migrations:migrate   # bring the schema up to date
+ */
+
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "bin/console must be run from the command line.\n");
+    exit(1);
+}
+
+// The installer needs to bootstrap YOURLS before the tables exist, and must not be redirected
+// to the web installer, so flag this run as "installing".
+define('YOURLS_INSTALLING', true);
+define('YOURLS_CONSOLE', true);
+
+// Allow pointing at an alternate config, eg to install a second YOURLS from the same checkout
+$config_from_env = getenv('YOURLS_CONFIGFILE');
+if (is_string($config_from_env) && $config_from_env !== '') {
+    if (!is_readable($config_from_env)) {
+        fwrite(STDERR, sprintf("Config file not readable: %s\n", $config_from_env));
+        exit(1);
+    }
+    define('YOURLS_CONFIGFILE', $config_from_env);
+}
+
+require_once dirname(__DIR__) . '/includes/load-yourls.php';
+
+$application = new \YOURLS\Console\Application();
+
+exit($application->run());

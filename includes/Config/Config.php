@@ -146,6 +146,25 @@ class Config {
     }
 
     /**
+     * Check that the database table prefix is a usable SQL identifier
+     *
+     * The prefix is concatenated into every table name. Table names reach the database both
+     * through YOURLS (which quotes them) and through third party tooling such as the Doctrine
+     * Migrations metadata storage (which does not), so a prefix containing a quote character or
+     * anything else exotic is rejected outright rather than being silently mangled.
+     *
+     * @since  1.10.5
+     * @param  mixed $prefix Prefix value, or null if the constant is undefined
+     * @return void
+     * @throws ConfigException
+     */
+    public function check_db_prefix(mixed $prefix): void {
+        if (!is_string($prefix) || !preg_match('/^[A-Za-z0-9_]*$/', $prefix)) {
+            throw new ConfigException('YOURLS_DB_PREFIX must contain only letters, numbers and underscores. Check your config.php');
+        }
+    }
+
+    /**
      * Define core constants that have not been user defined in config.php
      *
      * @since  1.7.3
@@ -156,6 +175,7 @@ class Config {
         // Check minimal config job has been properly done
         $this->check_mandatory_constants();
         $this->check_cookie_key(defined('YOURLS_COOKIEKEY') ? YOURLS_COOKIEKEY : null);
+        $this->check_db_prefix(defined('YOURLS_DB_PREFIX') ? YOURLS_DB_PREFIX : null);
 
         /**
          * The following has an awful CRAP index and it would be much shorter reduced to something like

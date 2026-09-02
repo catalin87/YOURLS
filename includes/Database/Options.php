@@ -43,7 +43,11 @@ class Options {
     public function get_all_options() {
         // Get option values from DB
         $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "SELECT option_name, option_value FROM $table WHERE 1=1";
+        $sql = $this->ydb->query_builder()
+                         ->select('`option_name`', '`option_value`')
+                         ->from($this->ydb->table($table))
+                         ->where('1=1')
+                         ->getSQL();
 
         try {
             $options = (array) $this->ydb->fetchPairs($sql);
@@ -101,8 +105,12 @@ class Options {
         }
 
         // Get option value from DB
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "SELECT option_value FROM $table WHERE option_name = :option_name LIMIT 1";
+        $sql = $this->ydb->query_builder()
+                         ->select('`option_value`')
+                         ->from($this->ydb->table(YOURLS_DB_TABLE_OPTIONS))
+                         ->where('`option_name` = :option_name')
+                         ->setMaxResults(1)
+                         ->getSQL();
         $bind = array('option_name' => $name);
 
         // Use fechOne() to get array('option_value'=>$value), or false if not found.
@@ -160,8 +168,11 @@ class Options {
         }
 
         $_newvalue = yourls_maybe_serialize($newvalue);
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql  = "UPDATE $table SET option_value = :value WHERE option_name = :name";
+        $sql  = $this->ydb->query_builder()
+                          ->update($this->ydb->table(YOURLS_DB_TABLE_OPTIONS))
+                          ->set('`option_value`', ':value')
+                          ->where('`option_name` = :name')
+                          ->getSQL();
         $bind = array('name' => $name, 'value' => $_newvalue);
         $do   = $this->ydb->fetchAffected($sql, $bind);
 
@@ -204,9 +215,11 @@ class Options {
             // return false;
         // }
 
-        $table = YOURLS_DB_TABLE_OPTIONS;
         $_value = yourls_maybe_serialize($value);
-        $sql  = "INSERT INTO $table (option_name, option_value) VALUES (:name, :value)";
+        $sql  = $this->ydb->query_builder()
+                          ->insert($this->ydb->table(YOURLS_DB_TABLE_OPTIONS))
+                          ->values(['`option_name`' => ':name', '`option_value`' => ':value'])
+                          ->getSQL();
         $bind = array('name' => $name, 'value' => $_value);
         $do   = $this->ydb->fetchAffected($sql, $bind);
 
@@ -236,8 +249,10 @@ class Options {
             return false;
         }
 
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "DELETE FROM $table WHERE option_name = :name";
+        $sql = $this->ydb->query_builder()
+                         ->delete($this->ydb->table(YOURLS_DB_TABLE_OPTIONS))
+                         ->where('`option_name` = :name')
+                         ->getSQL();
         $bind = array('name' => $name);
         $do   = $this->ydb->fetchAffected($sql, $bind);
 

@@ -58,8 +58,16 @@ function yut_drop_all_tables_if_local() {
     if( !yut_is_local() )
         return;
 
-    // If not running in Travis environment, drop any tables from the selected database prior to starting tests
-    $tables = sprintf('%s,%s,%s', YOURLS_DB_TABLE_URL, YOURLS_DB_TABLE_OPTIONS, YOURLS_DB_TABLE_LOG);
-    $sql = sprintf('DROP TABLE IF EXISTS %s', $tables);
-    yourls_get_db('write-drop_tables_if_local')->perform($sql);
+    // If not running in Travis environment, drop all tables from the selected database prior to
+    // starting tests. The migrations bookkeeping table goes too, so migrations re-run from scratch.
+    $ydb = yourls_get_db('write-drop_tables_if_local');
+
+    $tables = array_merge(
+        array_values(\YOURLS\Database\Schema::all()),
+        [\YOURLS\Database\Schema::table('migration_versions')]
+    );
+
+    $quoted = array_map(fn($table) => $ydb->table($table), $tables);
+
+    $ydb->perform(sprintf('DROP TABLE IF EXISTS %s', implode(',', $quoted)));
 }
