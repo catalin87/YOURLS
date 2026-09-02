@@ -1,0 +1,41 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * YOURLS command-line entry point.
+ *
+ * Usage:
+ *   php bin/console yourls:install          # install YOURLS (schema via Doctrine migrations)
+ *   php bin/console migrations:migrate      # run pending Doctrine migrations
+ *   php bin/console migrations:status       # show migration status
+ *   php bin/console list                    # list all commands
+ *
+ * It boots YOURLS the same way the web entry points do (includes/load-yourls.php), so all YOURLS
+ * functions, config constants and the DBAL connection are available to the commands.
+ *
+ * @since 1.11
+ */
+
+// Only run from the CLI.
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "bin/console must be run from the command line.\n");
+    exit(1);
+}
+
+// YOURLS installs run before options exist; let the bootstrap know we're installing so it does not
+// try to redirect us to the web installer.
+if (!defined('YOURLS_INSTALLING')) {
+    define('YOURLS_INSTALLING', true);
+}
+// Mark this as a console/admin context so auth/SSL redirects don't fire.
+if (!defined('YOURLS_ADMIN')) {
+    define('YOURLS_ADMIN', true);
+}
+
+// Boot YOURLS (loads config, constants, functions, DB layer, plugins).
+require_once dirname(__DIR__) . '/includes/load-yourls.php';
+
+use YOURLS\Console\Application;
+
+$application = new Application();
+exit($application->run());

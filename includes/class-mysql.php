@@ -26,41 +26,18 @@ function yourls_db_connect($context = '') {
     // This action is deprecated
     yourls_do_action( 'set_DB_driver', 'deprecated' );
 
-    // Get custom port if any
-    if (str_contains($dbhost, ':')) {
-        list( $dbhost, $dbport ) = explode( ':', $dbhost );
-        $dbhost = sprintf( '%1$s;port=%2$d', $dbhost, $dbport );
-    }
-
-    $charset = yourls_apply_filter( 'db_connect_charset', 'utf8mb4', $context );
-
     /**
-     * Data Source Name (dsn) used to connect the DB
-     *
-     * DSN with PDO is something like:
-     * 'mysql:host=123.4.5.6;dbname=test_db;port=3306'
-     * 'sqlite:/opt/databases/mydb.sq3'
-     * 'pgsql:host=192.168.13.37;port=5432;dbname=omgwtf'
+     * Build the Doctrine DBAL connection from the YOURLS_DB_* constants. DoctrineConnector honours
+     * the historical db_connect_charset / db_connect_custom_dsn / db_connect_driver_option /
+     * db_connect_attributes filters, so plugins hooking those keep working.
      */
-    $dsn = sprintf( 'mysql:host=%s;dbname=%s;charset=%s', $dbhost, $dbname, $charset );
-    $dsn = yourls_apply_filter( 'db_connect_custom_dsn', $dsn, $context );
+    $connection = \YOURLS\Database\DoctrineConnector::fromConstants( $context );
 
-    /**
-     * PDO driver options and attributes
-     *
-     * The PDO constructor is something like:
-     *   new PDO( string $dsn, string $username, string $password [, array $options ] )
-     * The driver options are passed to the PDO constructor, eg array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION)
-     * The attribute options are then set in a foreach($attr as $k=>$v){$db->setAttribute($k, $v)} loop
-     */
-    $driver_options = yourls_apply_filter( 'db_connect_driver_option', [], $context ); // driver options as key-value pairs
-    $attributes = yourls_apply_filter( 'db_connect_attributes', [], $context ); // attributes as key-value pairs
-
-    $ydb = new \YOURLS\Database\YDB( $dsn, $user, $pass, $driver_options, $attributes );
+    $ydb = new \YOURLS\Database\YDB( $connection, $user, $pass );
     $ydb->init();
 
     // Past this point, we're connected
-    yourls_debug_log( 'Connected to ' . $dsn );
+    yourls_debug_log( 'Connected to ' . $dbname . '@' . $dbhost );
 
     yourls_debug_mode( YOURLS_DEBUG );
 
