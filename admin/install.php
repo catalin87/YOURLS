@@ -41,12 +41,21 @@ if ( isset($_REQUEST['install']) && count( $error ) == 0 ) {
         $warning[] = yourls__( 'Could not write file <tt>.htaccess</tt> in YOURLS root directory. You will have to do it manually. See <a href="http://yourls.org/htaccess">how</a>.' );
     }
 
-    // Create SQL tables
-    $install = yourls_create_sql_tables();
-    if ( isset( $install['error'] ) )
-        $error = array_merge( $error, $install['error'] );
-    if ( isset( $install['success'] ) )
-        $success = array_merge( $success, $install['success'] );
+    /**
+     * Create the schema (Doctrine migrations) then seed options + sample links.
+     *
+     * The web installer now delegates to the same \YOURLS\Console\Installer service used by
+     * `bin/console yourls:install`, so both installers behave identically. If Doctrine migrations
+     * cannot run, the Installer transparently falls back to the legacy yourls_create_sql_tables().
+     */
+    $installer = new \YOURLS\Console\Installer();
+    $installer->createSchema( true );
+    // The migrations path does not seed; seed only if options are not there yet.
+    if ( (int) yourls_get_option( 'db_version', 0 ) === 0 ) {
+        $installer->seed();
+    }
+    $error   = array_merge( $error, $installer->getErrorMessages() );
+    $success = array_merge( $success, $installer->getSuccessMessages() );
 }
 
 

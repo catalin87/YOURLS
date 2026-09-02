@@ -26,6 +26,8 @@ PRESERVE_IN_VENDOR=(
     'composer'
     'build-script'
     'symfony'
+    'doctrine'
+    'psr'
 )
 
 # Files & dirs to keep in each library directory

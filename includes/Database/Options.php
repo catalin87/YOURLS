@@ -18,6 +18,7 @@
 namespace YOURLS\Database;
 
 use YOURLS\Database\YDB;
+use YOURLS\Database\TablePrefix;
 use PDOException;
 
 class Options {
@@ -34,6 +35,19 @@ class Options {
     }
 
     /**
+     * Return the options table name, validated & backtick-quoted for safe use in a QueryBuilder.
+     *
+     * The table name derives from the admin-defined YOURLS_DB_PREFIX. TablePrefix::quote() rejects
+     * any prefix that is not a strict [A-Za-z0-9_] identifier, closing the identifier-injection
+     * vector that exists because table names cannot be bound as SQL parameters.
+     *
+     * @return string
+     */
+    protected function table(): string {
+        return TablePrefix::quote(YOURLS_DB_TABLE_OPTIONS);
+    }
+
+    /**
      * Read all options from DB at once, return bool
      *
      * @since  1.7.3
@@ -41,9 +55,12 @@ class Options {
      * @return bool    True on success, false on failure (eg table missing or empty)
      */
     public function get_all_options() {
-        // Get option values from DB
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "SELECT option_name, option_value FROM $table WHERE 1=1";
+        // Get option values from DB, built with the QueryBuilder against the secured table name.
+        $qb = $this->ydb->createQueryBuilder()
+            ->select('option_name', 'option_value')
+            ->from($this->table())
+            ->where('1 = 1');
+        $sql = $qb->getSQL();
 
         try {
             $options = (array) $this->ydb->fetchPairs($sql);
@@ -52,7 +69,7 @@ class Options {
 
             // We could not fetch value from the table. Let's check if the option table exists
             try {
-                $check = $this->ydb->fetchAffected(sprintf("SHOW TABLES LIKE '%s'", $table));
+                $check = $this->ydb->fetchAffected(sprintf("SHOW TABLES LIKE '%s'", YOURLS_DB_TABLE_OPTIONS));
                 // Table doesn't exist
                 if ($check ==0) {
                     return false;
@@ -100,9 +117,13 @@ class Options {
             return $this->ydb->get_option($name);
         }
 
-        // Get option value from DB
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "SELECT option_value FROM $table WHERE option_name = :option_name LIMIT 1";
+        // Get option value from DB, built with the QueryBuilder against the secured table name.
+        $qb = $this->ydb->createQueryBuilder()
+            ->select('option_value')
+            ->from($this->table())
+            ->where('option_name = :option_name')
+            ->setMaxResults(1);
+        $sql = $qb->getSQL();
         $bind = array('option_name' => $name);
 
         // Use fechOne() to get array('option_value'=>$value), or false if not found.
@@ -160,8 +181,11 @@ class Options {
         }
 
         $_newvalue = yourls_maybe_serialize($newvalue);
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql  = "UPDATE $table SET option_value = :value WHERE option_name = :name";
+        $qb = $this->ydb->createQueryBuilder()
+            ->update($this->table())
+            ->set('option_value', ':value')
+            ->where('option_name = :name');
+        $sql  = $qb->getSQL();
         $bind = array('name' => $name, 'value' => $_newvalue);
         $do   = $this->ydb->fetchAffected($sql, $bind);
 
@@ -204,9 +228,11 @@ class Options {
             // return false;
         // }
 
-        $table = YOURLS_DB_TABLE_OPTIONS;
         $_value = yourls_maybe_serialize($value);
-        $sql  = "INSERT INTO $table (option_name, option_value) VALUES (:name, :value)";
+        $qb = $this->ydb->createQueryBuilder()
+            ->insert($this->table())
+            ->values(array('option_name' => ':name', 'option_value' => ':value'));
+        $sql  = $qb->getSQL();
         $bind = array('name' => $name, 'value' => $_value);
         $do   = $this->ydb->fetchAffected($sql, $bind);
 
@@ -236,8 +262,10 @@ class Options {
             return false;
         }
 
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "DELETE FROM $table WHERE option_name = :name";
+        $qb = $this->ydb->createQueryBuilder()
+            ->delete($this->table())
+            ->where('option_name = :name');
+        $sql = $qb->getSQL();
         $bind = array('name' => $name);
         $do   = $this->ydb->fetchAffected($sql, $bind);
 
