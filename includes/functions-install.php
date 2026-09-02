@@ -194,7 +194,9 @@ function yourls_insert_with_markers( $filename, $marker, $insertion ) {
 }
 
 /**
- * Create MySQL tables. Return array( 'success' => array of success strings, 'errors' => array of error strings )
+ * Create the YOURLS tables by running the Doctrine migrations.
+ *
+ * Return array( 'success' => array of success strings, 'errors' => array of error strings )
  *
  * @since 1.3
  * @return array  An array like array( 'success' => array of success strings, 'errors' => array of error strings )
@@ -207,87 +209,7 @@ function yourls_create_sql_tables(): array {
         return $pre;
     }
 
-    $ydb = yourls_get_db('write-create_sql_tables');
-
-    $error_msg = array();
-    $success_msg = array();
-
-    // Create Table Query
-    $create_tables = array();
-    $create_tables[YOURLS_DB_TABLE_URL] =
-        'CREATE TABLE IF NOT EXISTS `'.YOURLS_DB_TABLE_URL.'` ('.
-         '`keyword` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT \'\','.
-         '`url` text CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,'.
-         '`title` text COLLATE utf8mb4_unicode_ci DEFAULT NULL,'.
-         '`timestamp` timestamp NOT NULL DEFAULT current_timestamp(),'.
-         '`ip` varchar(41) COLLATE utf8mb4_unicode_ci NOT NULL,'.
-         '`clicks` int(10) unsigned NOT NULL,'.
-         'PRIMARY KEY (`keyword`),'.
-         'KEY `ip` (`ip`),'.
-         'KEY `timestamp` (`timestamp`),'.
-         'KEY `url_idx` (`url`(30))'.
-        ') DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;';
-
-    $create_tables[YOURLS_DB_TABLE_OPTIONS] =
-        'CREATE TABLE IF NOT EXISTS `'.YOURLS_DB_TABLE_OPTIONS.'` ('.
-        '`option_id` bigint(20) unsigned NOT NULL auto_increment,'.
-        '`option_name` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL default \'\','.
-        '`option_value` longtext COLLATE utf8mb4_unicode_ci NOT NULL,'.
-        'PRIMARY KEY  (`option_id`,`option_name`),'.
-        'KEY `option_name` (`option_name`)'.
-        ') AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;';
-
-    $create_tables[YOURLS_DB_TABLE_LOG] =
-        'CREATE TABLE IF NOT EXISTS `'.YOURLS_DB_TABLE_LOG.'` ('.
-        '`click_id` int(11) NOT NULL auto_increment,'.
-        '`click_time` datetime NOT NULL,'.
-        '`shorturl` varchar(100) BINARY NOT NULL,'.
-        '`referrer` varchar(200) NOT NULL,'.
-        '`user_agent` varchar(255) NOT NULL,'.
-        '`ip_address` varchar(41) NOT NULL,'.
-        '`country_code` char(2) NOT NULL,'.
-        'PRIMARY KEY  (`click_id`),'.
-        'KEY `shorturl` (`shorturl`)'.
-        ') AUTO_INCREMENT=1 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;';
-
-
-    $create_table_count = 0;
-
-    // Make install process verbose to help troubleshoot installation issues
-    $debug = yourls_get_debug_mode();
-    yourls_debug_mode(true);
-
-    // Create tables
-    foreach ( $create_tables as $table_name => $table_query ) {
-        $ydb->perform( $table_query );
-        $create_success = $ydb->fetchAffected( "SHOW TABLES LIKE '$table_name'" );
-        if( $create_success ) {
-            $create_table_count++;
-            $success_msg[] = yourls_s( "Table '%s' created.", $table_name );
-        } else {
-            $error_msg[] = yourls_s( "Error creating table '%s'.", $table_name );
-        }
-    }
-
-    // Initializes the option table
-    if( !yourls_initialize_options() )
-        $error_msg[] = yourls__( 'Could not initialize options' );
-
-    // Insert sample links
-    if( !yourls_insert_sample_links() )
-        $error_msg[] = yourls__( 'Could not insert sample short URLs' );
-
-    // Check results of operations
-    if ( sizeof( $create_tables ) == $create_table_count ) {
-        $success_msg[] = yourls__( 'YOURLS tables successfully created.' );
-    } else {
-        $error_msg[] = yourls__( 'Error creating YOURLS tables.' );
-    }
-
-    // Restore debug mode to its original value
-    yourls_debug_mode( $debug );
-
-    return array( 'success' => $success_msg, 'error' => $error_msg );
+    return \YOURLS\Database\Installer::install();
 }
 
 /**

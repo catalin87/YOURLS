@@ -1,23 +1,56 @@
 <?php
 
 /**
- * Aura SQL wrapper for YOURLS that creates the almighty YDB object.
+ * Doctrine DBAL wrapper for YOURLS that creates the almighty YDB object.
  *
  * A fine example of a "class that knows too much" (see https://en.wikipedia.org/wiki/God_object)
  *
  * Note to plugin authors: you most likely SHOULD NOT use directly methods and properties of this class. Use instead
  * function wrappers (e.g. don't use $ydb->option, or $ydb->set_option(), use yourls_*_options() functions instead).
  *
+ * Since 1.10.5 this class is backed by Doctrine DBAL instead of Aura SQL. The public API is
+ * unchanged: the fetch* methods still take a SQL statement with named ":placeholders" and an array
+ * of values, and still return the very same shapes (stdClass objects for fetchObject/fetchObjects,
+ * arrays elsewhere), so existing plugins and core code keep working.
+ *
+ * Queries built internally by YOURLS use the DBAL QueryBuilder (see the query_builder() and
+ * table() helpers), which quotes table identifiers built from the user defined YOURLS_DB_PREFIX.
+ *
  * @since 1.7.3
  */
 
 namespace YOURLS\Database;
 
-use Aura\Sql\ExtendedPdo;
+use Doctrine\DBAL\ArrayParameterType;
+use Doctrine\DBAL\Configuration;
+use Doctrine\DBAL\Connection;
+use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\ParameterType;
+use Doctrine\DBAL\Query\QueryBuilder;
+use Doctrine\DBAL\Result;
 use PDO;
-use PDOStatement;
+use PDOException;
+use YOURLS\Database\Middleware\ProfilerMiddleware;
 
-class YDB extends ExtendedPdo {
+class YDB {
+
+    /**
+     * The Doctrine DBAL connection
+     * @var Connection
+     */
+    protected Connection $connection;
+
+    /**
+     * Connection parameters, as passed to Doctrine's DriverManager
+     * @var array
+     */
+    protected array $params = [];
+
+    /**
+     * The profiler, which logs queries and debug messages
+     * @var Profiler
+     */
+    protected Profiler $profiler;
 
     /**
      * Debug mode, default false
@@ -67,7 +100,7 @@ class YDB extends ExtendedPdo {
      * Are we emulating prepare statements ?
      * @var bool
      */
-    protected bool $is_emulate_prepare;
+    protected bool $is_emulate_prepare = false;
 
     /**
      * Bypass shunt filter? See fetch_wrapper()
@@ -77,13 +110,85 @@ class YDB extends ExtendedPdo {
 
     /**
      * @since 1.7.3
-     * @param string $dsn     The data source name
+     * @param string $dsn     The data source name, eg "mysql:host=localhost;dbname=yourls;charset=utf8mb4"
      * @param string $user    The username
      * @param string $pass    The password
      * @param array  $options Driver-specific options
+     * @param array  $attributes Driver attributes, set on the underlying PDO object
      */
-    public function __construct($dsn, $user, $pass, $options) {
-        parent::__construct($dsn, $user, $pass, $options);
+    public function __construct($dsn, $user, $pass, $options = [], $attributes = []) {
+        $this->params = self::dsn_to_params((string)$dsn, (string)$user, (string)$pass, (array)$options, (array)$attributes);
+
+        // Instantiate the profiler right away: even when the connection fails, code such as
+        // yourls_die() may call methods that reach for the profiler.
+        $this->start_profiler();
+    }
+
+    /**
+     * Translate a PDO style DSN into Doctrine DBAL connection parameters
+     *
+     * YOURLS has always exposed the DSN to plugins through the 'db_connect_custom_dsn' filter, so
+     * we keep accepting a DSN string and convert it, rather than forcing everyone to a new format.
+     *
+     * @since  1.10.5
+     * @param  string $dsn
+     * @param  string $user
+     * @param  string $pass
+     * @param  array  $options    PDO driver options
+     * @param  array  $attributes PDO attributes
+     * @return array              Doctrine DBAL connection parameters
+     */
+    protected static function dsn_to_params(string $dsn, string $user, string $pass, array $options = [], array $attributes = []): array {
+        $driver_map = [
+            'mysql'  => 'pdo_mysql',
+            'pgsql'  => 'pdo_pgsql',
+            'sqlite' => 'pdo_sqlite',
+            'oci'    => 'pdo_oci',
+            'sqlsrv' => 'pdo_sqlsrv',
+        ];
+
+        [$scheme, $rest] = array_pad(explode(':', $dsn, 2), 2, '');
+        $scheme = strtolower(trim($scheme));
+
+        $params = [
+            'driver'        => $driver_map[$scheme] ?? 'pdo_mysql',
+            'user'          => $user,
+            'password'      => $pass,
+            'driverOptions' => $options + $attributes,
+        ];
+
+        // sqlite DSNs are "sqlite:/path/to/file" or "sqlite::memory:"
+        if ($scheme === 'sqlite') {
+            if ($rest === '' || $rest === ':memory:') {
+                $params['memory'] = true;
+            } else {
+                $params['path'] = $rest;
+            }
+
+            return $params;
+        }
+
+        // Other PDO DSNs are a list of "key=value" pairs separated by semicolons
+        $dsn_map = [
+            'host'    => 'host',
+            'port'    => 'port',
+            'dbname'  => 'dbname',
+            'charset' => 'charset',
+            'unix_socket' => 'unix_socket',
+        ];
+
+        foreach (explode(';', $rest) as $pair) {
+            if (!str_contains($pair, '=')) {
+                continue;
+            }
+            [$key, $value] = explode('=', $pair, 2);
+            $key = strtolower(trim($key));
+            if (isset($dsn_map[$key])) {
+                $params[$dsn_map[$key]] = $key === 'port' ? (int)$value : $value;
+            }
+        }
+
+        return $params;
     }
 
     /**
@@ -101,24 +206,23 @@ class YDB extends ExtendedPdo {
         $this->connect_to_DB();
 
         $this->set_emulate_state();
-
-        $this->start_profiler();
     }
 
     /**
      * Check if we emulate prepare statements, and set bool flag accordingly
      *
-     * Check if current driver can PDO::getAttribute(PDO::ATTR_EMULATE_PREPARES)
-     * Some combinations of PHP/MySQL don't support this function. See
-     * https://travis-ci.org/YOURLS/YOURLS/jobs/271423782#L481
+     * Some combinations of PHP/MySQL don't support reading this attribute.
      *
      * @since  1.7.3
      * @return void
      */
     public function set_emulate_state() {
         try {
-            $this->is_emulate_prepare = $this->getAttribute(PDO::ATTR_EMULATE_PREPARES);
-        } catch (\PDOException $e) {
+            $pdo = $this->get_pdo();
+            $this->is_emulate_prepare = $pdo instanceof PDO
+                ? (bool)$pdo->getAttribute(PDO::ATTR_EMULATE_PREPARES)
+                : false;
+        } catch (\Throwable $e) {
             $this->is_emulate_prepare = false;
         }
     }
@@ -140,15 +244,83 @@ class YDB extends ExtendedPdo {
      *
      * @since  1.7.3
      * @return void
-     * @throws \PDOException
      */
     public function connect_to_DB() {
         try {
-            list($dsn, $_user, $_pwd, $_opt, $_queries) = $this->args;
-            $this->connect($dsn);
-        } catch ( \Exception $e ) {
+            $config = new Configuration();
+            $config->setMiddlewares([new ProfilerMiddleware($this->profiler)]);
+
+            $this->connection = DriverManager::getConnection($this->params, $config);
+
+            // Doctrine connects lazily: force a real connection so a bad config fails here
+            $this->connection->getNativeConnection();
+        } catch (\Exception $e) {
             $this->dead_or_error($e);
         }
+    }
+
+    /**
+     * Return the Doctrine DBAL connection
+     *
+     * @since  1.10.5
+     * @return Connection
+     */
+    public function get_connection(): Connection {
+        return $this->connection;
+    }
+
+    /**
+     * Return the underlying PDO object, if the driver is a PDO one
+     *
+     * @since  1.10.5
+     * @return object|null
+     */
+    public function get_pdo() {
+        try {
+            return $this->connection->getNativeConnection();
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Return a new Doctrine QueryBuilder bound to this connection
+     *
+     * This is the preferred way to build queries in YOURLS core: it takes care of quoting
+     * identifiers (including table names built from the user defined YOURLS_DB_PREFIX) and of
+     * binding values as real parameters.
+     *
+     * @since  1.10.5
+     * @return QueryBuilder
+     */
+    public function query_builder(): QueryBuilder {
+        return $this->connection->createQueryBuilder();
+    }
+
+    /**
+     * Safely quote a table (or any other) identifier
+     *
+     * Table names are built from YOURLS_DB_PREFIX, which is user defined in config.php. Passing
+     * them through the platform's identifier quoting makes sure a weird prefix cannot break out
+     * of the identifier and inject SQL.
+     *
+     * @since  1.10.5
+     * @param  string $identifier  eg 'yourls_url'
+     * @return string              eg '`yourls_url`'
+     */
+    public function quote_identifier(string $identifier): string {
+        return $this->connection->quoteIdentifier($identifier);
+    }
+
+    /**
+     * Alias of quote_identifier(), for readability when quoting a table name
+     *
+     * @since  1.10.5
+     * @param  string $table
+     * @return string
+     */
+    public function table(string $table): string {
+        return $this->quote_identifier($table);
     }
 
     /**
@@ -187,14 +359,34 @@ class YDB extends ExtendedPdo {
     public function start_profiler() {
         // Instantiate a custom logger and make it the profiler
         $yourls_logger = new Logger();
-        $profiler = new Profiler($yourls_logger);
-        $this->setProfiler($profiler);
+        $this->profiler = new Profiler($yourls_logger);
 
         /* By default, make "query" the log level. This way, each internal logging triggered
-         * by Aura SQL will be a "query", and logging triggered by yourls_debug_log() will be
-         * a "debug". See includes/functions-debug.php:yourls_debug_log()
+         * by the DBAL middleware will be a "query", and logging triggered by yourls_debug_log()
+         * will be a "debug". See includes/functions-debug.php:yourls_debug_log()
          */
-        $profiler->setLoglevel('query');
+        $this->profiler->setLoglevel('query');
+    }
+
+    /**
+     * Get the profiler
+     *
+     * @since  1.10.5
+     * @return Profiler
+     */
+    public function getProfiler(): Profiler {
+        return $this->profiler;
+    }
+
+    /**
+     * Set the profiler
+     *
+     * @since  1.10.5
+     * @param  Profiler $profiler
+     * @return void
+     */
+    public function setProfiler(Profiler $profiler): void {
+        $this->profiler = $profiler;
     }
 
     /**
@@ -427,11 +619,14 @@ class YDB extends ExtendedPdo {
      * @return string
      */
     public function mysql_version() {
-        return $this->pdo->getAttribute(PDO::ATTR_SERVER_VERSION);
+        return $this->connection->getServerVersion();
     }
 
     /**
      * Fetch the number of affected rows
+     *
+     * Note that for statements that return a result set (eg "SHOW TABLES LIKE ..."), this returns
+     * the number of rows in that result set, which is what YOURLS uses to check table existence.
      *
      * @since 1.10.4
      * @param string $statement SQL statement to execute
@@ -556,24 +751,285 @@ class YDB extends ExtendedPdo {
     }
 
     /**
-     * Performs a query with bound values and returns the resulting PDOStatement
+     * Performs a query with bound values.
      * You most likely should not use this method directly. Use the fetch_* methods instead.
      *
      * @since 1.10.4
      * @param string $statement The SQL statement to perform.
      * @param array  $values    Values to bind to the query
-     * @return PDOStatement
+     * @return Result
      */
-    public function perform(string $statement, array $values = []): PDOStatement {
+    public function perform(string $statement, array $values = []): Result {
         return $this->fetch_wrapper('perform', $statement, $values);
+    }
+
+    /**
+     * Run a raw SQL statement, without binding any value.
+     *
+     * @since 1.10.5
+     * @param string $statement
+     * @return Result
+     */
+    public function query(string $statement): Result {
+        return $this->execute($statement);
+    }
+
+    /**
+     * Execute a statement and return the DBAL result
+     *
+     * Named ":placeholders" are bound as real parameters. A value that is an array is bound as a
+     * list, so "WHERE x IN (:list)" keeps working the way it did with Aura SQL.
+     *
+     * @since  1.10.5
+     * @param  string $statement
+     * @param  array  $values
+     * @return Result
+     */
+    protected function execute(string $statement, array $values = []): Result {
+        [$statement, $params, $types] = $this->bind_values($statement, $values);
+
+        /* Historically YOURLS ran on PDO, and code in core and in plugins catches PDOException
+         * around queries. Doctrine wraps driver errors in its own exception types, so convert
+         * them here - this is the single point every query goes through. */
+        try {
+            return $this->connection->executeQuery($statement, $params, $types);
+        } catch (\Doctrine\DBAL\Exception $e) {
+            throw $this->to_pdo_exception($e);
+        }
+    }
+
+    /**
+     * Prepare the parameters and types arrays that Doctrine expects
+     *
+     * Aura SQL used to expand an array bound to a named placeholder into a comma separated list.
+     * Doctrine does the same when the parameter is flagged with an ArrayParameterType, so we
+     * detect array values and type them accordingly.
+     *
+     * @since  1.10.5
+     * @param  string $statement
+     * @param  array  $values
+     * @return array  [$statement, $params, $types]
+     */
+    protected function bind_values(string $statement, array $values): array {
+        $params = [];
+        $types  = [];
+
+        foreach ($values as $name => $value) {
+            // Accept both ':name' and 'name' as keys, like PDO does
+            $key = is_string($name) ? ltrim($name, ':') : $name;
+
+            if (is_array($value)) {
+                // An empty IN () list is a SQL syntax error: use a list that matches nothing
+                if ($value === []) {
+                    $params[$key] = [null];
+                    $types[$key]  = ArrayParameterType::STRING;
+                    continue;
+                }
+
+                $params[$key] = array_values($value);
+                $types[$key]  = $this->all_integers($value)
+                    ? ArrayParameterType::INTEGER
+                    : ArrayParameterType::STRING;
+                continue;
+            }
+
+            $params[$key] = $value;
+            $types[$key]  = $this->parameter_type($value);
+        }
+
+        return [$statement, $params, $types];
+    }
+
+    /**
+     * @param  array $values
+     * @return bool  True if every value is an integer
+     */
+    protected function all_integers(array $values): bool {
+        foreach ($values as $value) {
+            if (!is_int($value)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Guess the Doctrine parameter type of a scalar value
+     *
+     * @since  1.10.5
+     * @param  mixed $value
+     * @return ParameterType
+     */
+    protected function parameter_type(mixed $value): ParameterType {
+        return match (true) {
+            is_null($value) => ParameterType::NULL,
+            is_bool($value) => ParameterType::BOOLEAN,
+            is_int($value)  => ParameterType::INTEGER,
+            default         => ParameterType::STRING,
+        };
+    }
+
+    /**
+     * Run one of the fetch methods against the DB
+     *
+     * @since  1.10.5
+     * @param  string $method
+     * @param  mixed  ...$args
+     * @return mixed
+     * @throws PDOException on a database error, for backward compatibility
+     */
+    protected function do_fetch(string $method, ...$args): mixed {
+        $statement = (string)($args[0] ?? '');
+        $values    = (array)($args[1] ?? []);
+
+        // Tell the profiler which YOURLS method is responsible for the query it's about to see
+        $this->profiler->set_pending_function($method);
+
+        try {
+            switch ($method) {
+                case 'fetchAffected':
+                    $result = $this->execute($statement, $values);
+                    /* A statement that returns rows (eg "SHOW TABLES LIKE ...") reports 0 affected
+                     * rows on most drivers, so fall back to counting the returned rows: YOURLS uses
+                     * fetchAffected() as a table existence probe. */
+                    $affected = $result->rowCount();
+                    if ($affected === 0 && $result->columnCount() > 0) {
+                        $affected = count($result->fetchAllNumeric());
+                    }
+
+                    return (int)$affected;
+
+                case 'fetchAll':
+                case 'fetchAssoc':
+                    return $this->execute($statement, $values)->fetchAllAssociative();
+
+                case 'fetchCol':
+                    return $this->execute($statement, $values)->fetchFirstColumn();
+
+                case 'fetchGroup':
+                    return $this->fetch_group($statement, $values, $args[2] ?? PDO::FETCH_COLUMN);
+
+                case 'fetchObject':
+                    $row = $this->execute($statement, $values)->fetchAssociative();
+
+                    return $row === false
+                        ? false
+                        : $this->to_object($row, (string)($args[2] ?? 'stdClass'), (array)($args[3] ?? []));
+
+                case 'fetchObjects':
+                    $class = (string)($args[2] ?? 'stdClass');
+                    $ctor  = (array)($args[3] ?? []);
+
+                    return array_map(
+                        fn(array $row) => $this->to_object($row, $class, $ctor),
+                        $this->execute($statement, $values)->fetchAllAssociative()
+                    );
+
+                case 'fetchOne':
+                    return $this->execute($statement, $values)->fetchAssociative();
+
+                case 'fetchPairs':
+                    return $this->execute($statement, $values)->fetchAllKeyValue();
+
+                case 'fetchValue':
+                    return $this->execute($statement, $values)->fetchOne();
+
+                case 'perform':
+                    return $this->execute($statement, $values);
+
+                default:
+                    throw new \BadMethodCallException(sprintf('Unknown fetch method "%s"', $method));
+            }
+        } finally {
+            // execute() converts Doctrine exceptions to PDOException for backward compatibility
+            $this->profiler->set_pending_function(null);
+        }
+    }
+
+    /**
+     * Convert a Doctrine exception to a PDOException, preserving message and SQLSTATE
+     *
+     * @since  1.10.5
+     * @param  \Doctrine\DBAL\Exception $e
+     * @return PDOException
+     */
+    protected function to_pdo_exception(\Doctrine\DBAL\Exception $e): PDOException {
+        // If a PDOException triggered this, re-use it as-is: it has the richest information
+        for ($previous = $e->getPrevious(); $previous !== null; $previous = $previous->getPrevious()) {
+            if ($previous instanceof PDOException) {
+                return $previous;
+            }
+        }
+
+        $exception = new PDOException($e->getMessage(), (int)$e->getCode(), $e);
+        if ($e instanceof \Doctrine\DBAL\Exception\DriverException && $e->getSQLState() !== null) {
+            $exception->errorInfo = [$e->getSQLState(), $e->getCode(), $e->getMessage()];
+        }
+
+        return $exception;
+    }
+
+    /**
+     * Fetch rows grouped by their first column
+     *
+     * @since  1.10.5
+     * @param  string $statement
+     * @param  array  $values
+     * @param  int    $style  PDO fetch style
+     * @return array
+     */
+    protected function fetch_group(string $statement, array $values, int $style): array {
+        $rows   = $this->execute($statement, $values)->fetchAllNumeric();
+        $result = [];
+
+        foreach ($rows as $row) {
+            $key  = array_shift($row);
+            $rest = $style === PDO::FETCH_COLUMN && count($row) === 1 ? $row[0] : $row;
+
+            $result[$key][] = $rest;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Turn an associative row into an object of the requested class
+     *
+     * Mirrors PDO::FETCH_CLASS: properties are set on the object before the constructor runs.
+     *
+     * @since  1.10.5
+     * @param  array  $row
+     * @param  string $class
+     * @param  array  $args  constructor arguments
+     * @return object
+     */
+    protected function to_object(array $row, string $class = 'stdClass', array $args = []): object {
+        if ($class === 'stdClass' || $class === '') {
+            return (object)$row;
+        }
+
+        $reflection = new \ReflectionClass($class);
+        $object     = $reflection->newInstanceWithoutConstructor();
+
+        foreach ($row as $name => $value) {
+            $object->$name = $value;
+        }
+
+        $constructor = $reflection->getConstructor();
+        if ($constructor !== null) {
+            $constructor->invokeArgs($object, $args);
+        }
+
+        return $object;
     }
 
     /**
      * Wrapper for all fetch methods, allowing plugins to intercept and modify query results.
      *
      * @since 1.10.4
-     * @param string $method  The parent fetch method name to call (e.g., 'fetchAll', 'fetchValue')
-     * @param mixed  ...$args Variable number of arguments to pass to the parent method
+     * @param string $method  The fetch method name to call (e.g., 'fetchAll', 'fetchValue')
+     * @param mixed  ...$args Variable number of arguments to pass to the method
      * @return mixed The cached result if available, otherwise the fresh query result
      */
     public function fetch_wrapper(string $method, ...$args): mixed {
@@ -588,7 +1044,7 @@ class YDB extends ExtendedPdo {
         // Filter the query statement
         $args[0] = yourls_apply_filter('fetch_wrapper_statement', $args[0], $method, $args);
 
-        return parent::$method( ...$args);
+        return $this->do_fetch($method, ...$args);
     }
 
     /**
@@ -599,7 +1055,7 @@ class YDB extends ExtendedPdo {
      *
      * Example usage:
      *      $ydb = yourls_get_db('write-get_from_cache');
-     *      $result = $ydb->withoutFilters(function($db) use ($method, $args) {
+     *      $result = $ydb->without_filters(function($db) use ($method, $args) {
      *          return $db->fetch_wrapper($method, ...$args);
      *      });
      *

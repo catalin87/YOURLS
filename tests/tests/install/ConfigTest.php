@@ -101,6 +101,64 @@ class ConfigTest extends PHPUnit\Framework\TestCase {
     }
 
     /**
+     * Unacceptable table prefixes
+     *
+     * The prefix ends up in every table name, including in table names built by tooling that
+     * does not quote identifiers, so anything but [A-Za-z0-9_] must be refused.
+     *
+     * @return array
+     */
+    public static function bad_db_prefixes(): array {
+        return [
+            'undefined'  => [null],
+            'not string' => [1337],
+            'backtick'   => ['ev`il_'],
+            'quote'      => ["ev'il_"],
+            'dquote'     => ['ev"il_'],
+            'semicolon'  => ['yourls;drop_'],
+            'space'      => ['my prefix_'],
+            'dash'       => ['my-prefix_'],
+            'dot'        => ['db.yourls_'],
+            'injection'  => ['a`; DROP TABLE x; --_'],
+        ];
+    }
+
+    /**
+     * @param mixed $prefix
+     * @return void
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('bad_db_prefixes')]
+    public function test_bad_db_prefix(mixed $prefix): void {
+        $this->expectException(YOURLS\Exceptions\ConfigException::class);
+        (new \YOURLS\Config\Config())->check_db_prefix($prefix);
+    }
+
+    /**
+     * Acceptable table prefixes
+     *
+     * @return array
+     */
+    public static function good_db_prefixes(): array {
+        return [
+            'usual'     => ['yourls_'],
+            'custom'    => ['custom_p42_'],
+            'no suffix' => ['yourls'],
+            'empty'     => [''],
+            'digits'    => ['42_'],
+        ];
+    }
+
+    /**
+     * @param string $prefix
+     * @return void
+     */
+    #[\PHPUnit\Framework\Attributes\DataProvider('good_db_prefixes')]
+    public function test_good_db_prefix(string $prefix): void {
+        $this->expectNotToPerformAssertions();
+        (new \YOURLS\Config\Config())->check_db_prefix($prefix);
+    }
+
+    /**
      * Test Init actions. Not sure this is a good idea, might become cumbersome to maintain?
      */
     public function test_init_defaults() {

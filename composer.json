@@ -16,7 +16,7 @@
         "source": "https://github.com/YOURLS/YOURLS"
     },
     "require": {
-        "php": "^8.1",
+        "php": "^8.2",
         "ext-dom": "*",
         "ext-filter": "*",
         "ext-hash": "*",
@@ -27,7 +27,11 @@
         "rmccue/requests" : "^2.0",
         "pomo/pomo" : "^1.4",
         "geoip2/geoip2" : "^2.10",
-        "aura/sql": "^6.0",
+        "doctrine/dbal": "^4.4",
+        "doctrine/migrations": "^3.9",
+        "symfony/routing": "^7.4",
+        "symfony/http-foundation": "^7.4",
+        "symfony/console": "^7.4",
         "jakeasmith/http_build_url": "^1.0",
         "symfony/polyfill-mbstring": "^1.15",
         "symfony/polyfill-intl-idn": "^1.17",
@@ -39,7 +43,10 @@
     "config": {
         "vendor-dir": "includes/vendor",
         "platform": {
-            "php": "8.1.0"
+            "php": "8.2.0"
+        },
+        "allow-plugins": {
+            "composer/package-versions-deprecated": false
         },
         "platform-check": false
     },

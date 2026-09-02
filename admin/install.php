@@ -41,7 +41,8 @@ if ( isset($_REQUEST['install']) && count( $error ) == 0 ) {
         $warning[] = yourls__( 'Could not write file <tt>.htaccess</tt> in YOURLS root directory. You will have to do it manually. See <a href="http://yourls.org/htaccess">how</a>.' );
     }
 
-    // Create SQL tables
+    /* Create the SQL tables by running the Doctrine migrations, and seed the default data.
+     * This is the very same code path as `php bin/console yourls:install`. */
     $install = yourls_create_sql_tables();
     if ( isset( $install['error'] ) )
         $error = array_merge( $error, $install['error'] );
@@ -73,6 +74,10 @@ yourls_html_head( 'install', yourls__( 'Install YOURLS' ) );
             // Display install button or link to admin area if applicable
             if( !yourls_is_installed() && !isset($_REQUEST['install']) ) {
                 echo '<p style="text-align: center;"><input type="submit" name="install" value="' . yourls__( 'Install YOURLS') .'" class="button" /></p>';
+                printf(
+                    '<p style="text-align: center; font-size: 0.9em;">%s<br/><code>php bin/console yourls:install</code></p>',
+                    yourls__( 'You can also install from the command line:' )
+                );
             } else {
                 if( count($error) == 0 )
                     echo '<p style="text-align: center;">&raquo; <a href="'.yourls_admin_url().'" title="' . yourls__( 'YOURLS Administration Page') . '">' . yourls__( 'YOURLS Administration Page') . '</a></p>';

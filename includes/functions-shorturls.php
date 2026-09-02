@@ -267,10 +267,14 @@ function yourls_delete_link_by_keyword( $keyword ) {
         return $pre;
     }
 
-    $table = YOURLS_DB_TABLE_URL;
     $keyword = yourls_sanitize_keyword($keyword);
     $ydb = yourls_get_db('write-delete_link_by_keyword');
-    $delete = $ydb->fetchAffected("DELETE FROM `$table` WHERE `keyword` = :keyword", array('keyword' => $keyword));
+
+    $query = $ydb->query_builder()
+                 ->delete($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->where('`keyword` = :keyword');
+
+    $delete = $ydb->fetchAffected($query->getSQL(), array('keyword' => $keyword));
     $ydb->delete_infos($keyword); // Clear the cache.
     yourls_do_action( 'delete_link', $keyword, $delete );
     return $delete;
@@ -291,7 +295,6 @@ function yourls_insert_link_in_db($url, $keyword, $title = '' ) {
     $timestamp = date('Y-m-d H:i:s');
     $ip        = yourls_get_IP();
 
-    $table = YOURLS_DB_TABLE_URL;
     $binds = array(
         'keyword'   => $keyword,
         'url'       => $url,
@@ -300,7 +303,19 @@ function yourls_insert_link_in_db($url, $keyword, $title = '' ) {
         'ip'        => $ip,
     );
     $ydb = yourls_get_db('write-insert_link_in_db');
-    $insert = $ydb->fetchAffected("INSERT INTO `$table` (`keyword`, `url`, `title`, `timestamp`, `ip`, `clicks`) VALUES(:keyword, :url, :title, :timestamp, :ip, 0);", $binds);
+
+    $query = $ydb->query_builder()
+                 ->insert($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->values([
+                     '`keyword`'   => ':keyword',
+                     '`url`'       => ':url',
+                     '`title`'     => ':title',
+                     '`timestamp`' => ':timestamp',
+                     '`ip`'        => ':ip',
+                     '`clicks`'    => '0',
+                 ]);
+
+    $insert = $ydb->fetchAffected($query->getSQL(), $binds);
 
     if ( $insert ) {
         $infos = $binds;
@@ -329,9 +344,15 @@ function yourls_long_url_exists( $url ) {
         return $pre;
     }
 
-    $table = YOURLS_DB_TABLE_URL;
-    $url   = yourls_sanitize_url($url);
-    $url_exists = yourls_get_db('read-long_url_exists')->fetchObject("SELECT * FROM `$table` WHERE `url` = :url", array('url'=>$url));
+    $url = yourls_sanitize_url($url);
+    $ydb = yourls_get_db('read-long_url_exists');
+
+    $query = $ydb->query_builder()
+                 ->select('*')
+                 ->from($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->where('`url` = :url');
+
+    $url_exists = $ydb->fetchObject($query->getSQL(), array('url'=>$url));
 
     if ($url_exists === false) {
         $url_exists = NULL;
@@ -358,7 +379,7 @@ function yourls_edit_link($url, $keyword, $newkeyword='', $title='' ) {
 
     $ydb = yourls_get_db('write-edit_link');
 
-    $table = YOURLS_DB_TABLE_URL;
+    $table = $ydb->table(YOURLS_DB_TABLE_URL);
     $url = yourls_sanitize_url($url);
     $keyword = yourls_sanitize_keyword($keyword);
     $title = yourls_sanitize_title($title);
@@ -370,11 +391,19 @@ function yourls_edit_link($url, $keyword, $newkeyword='', $title='' ) {
         return yourls_apply_filter( 'edit_link', $return, $url, $keyword, $newkeyword, $title );
     }
 
-    $old_url = $ydb->fetchValue("SELECT `url` FROM `$table` WHERE `keyword` = :keyword", array('keyword' => $keyword));
+    $old_url_query = $ydb->query_builder()
+                          ->select('`url`')
+                          ->from($table)
+                          ->where('`keyword` = :keyword');
+    $old_url = $ydb->fetchValue($old_url_query->getSQL(), array('keyword' => $keyword));
 
     // Check if new URL is not here already
     if ( $old_url != $url && !yourls_allow_duplicate_longurls() ) {
-        $new_url_already_there = intval($ydb->fetchValue("SELECT COUNT(keyword) FROM `$table` WHERE `url` = :url;", array('url' => $url)));
+        $count_query = $ydb->query_builder()
+                           ->select('COUNT(keyword)')
+                           ->from($table)
+                           ->where('`url` = :url');
+        $new_url_already_there = intval($ydb->fetchValue($count_query->getSQL(), array('url' => $url)));
     } else {
         $new_url_already_there = false;
     }
@@ -390,9 +419,14 @@ function yourls_edit_link($url, $keyword, $newkeyword='', $title='' ) {
 
     // All clear, update
     if ( ( !$new_url_already_there || yourls_allow_duplicate_longurls() ) && $keyword_is_ok ) {
-            $sql   = "UPDATE `$table` SET `url` = :url, `keyword` = :newkeyword, `title` = :title WHERE `keyword` = :keyword";
+            $update_query = $ydb->query_builder()
+                                ->update($table)
+                                ->set('`url`', ':url')
+                                ->set('`keyword`', ':newkeyword')
+                                ->set('`title`', ':title')
+                                ->where('`keyword` = :keyword');
             $binds = array('url' => $url, 'newkeyword' => $newkeyword, 'title' => $title, 'keyword' => $keyword);
-            $update_url = $ydb->fetchAffected($sql, $binds);
+            $update_url = $ydb->fetchAffected($update_query->getSQL(), $binds);
         if( $update_url ) {
             $return['url']     = array( 'keyword'       => $newkeyword,
                                         'shorturl'      => yourls_link($newkeyword),
@@ -438,9 +472,14 @@ function yourls_edit_link_title( $keyword, $title ) {
     $keyword = yourls_sanitize_keyword( $keyword );
     $title = yourls_sanitize_title( $title );
 
-    $table = YOURLS_DB_TABLE_URL;
     $ydb = yourls_get_db('write-edit_link_title');
-    $update = $ydb->fetchAffected("UPDATE `$table` SET `title` = :title WHERE `keyword` = :keyword;", array('title' => $title, 'keyword' => $keyword));
+
+    $query = $ydb->query_builder()
+                 ->update($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->set('`title`', ':title')
+                 ->where('`keyword` = :keyword');
+
+    $update = $ydb->fetchAffected($query->getSQL(), array('title' => $title, 'keyword' => $keyword));
 
     if ( $update ) {
         $ydb->update_infos_if_exists( $keyword, array('title' => $title) );
@@ -539,8 +578,12 @@ function yourls_get_keyword_infos( $keyword, $use_cache = true ) {
 
     yourls_do_action( 'get_keyword_not_cached', $keyword );
 
-    $table = YOURLS_DB_TABLE_URL;
-    $infos = $ydb->fetchObject("SELECT * FROM `$table` WHERE `keyword` = :keyword", array('keyword' => $keyword));
+    $query = $ydb->query_builder()
+                 ->select('*')
+                 ->from($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->where('`keyword` = :keyword');
+
+    $infos = $ydb->fetchObject($query->getSQL(), array('keyword' => $keyword));
 
     if( $infos ) {
         $infos = (array)$infos;
@@ -645,10 +688,15 @@ function yourls_get_keyword_timestamp( $keyword, $notfound = false ) {
  * @return array            stats
  */
 function yourls_get_keyword_stats( $shorturl ) {
-    $table_url = YOURLS_DB_TABLE_URL;
-    $shorturl  = yourls_sanitize_keyword( $shorturl );
+    $shorturl = yourls_sanitize_keyword( $shorturl );
+    $ydb      = yourls_get_db('read-get_keyword_stats');
 
-    $res = yourls_get_db('read-get_keyword_stats')->fetchObject("SELECT * FROM `$table_url` WHERE `keyword` = :keyword", array('keyword' => $shorturl));
+    $query = $ydb->query_builder()
+                 ->select('*')
+                 ->from($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->where('`keyword` = :keyword');
+
+    $res = $ydb->fetchObject($query->getSQL(), array('keyword' => $shorturl));
 
     if( !$res ) {
         // non existent link
@@ -684,12 +732,17 @@ function yourls_get_keyword_stats( $shorturl ) {
  */
 function yourls_get_longurl_keywords( $longurl, $order = 'ASC' ) {
     $longurl = yourls_sanitize_url($longurl);
-    $table   = YOURLS_DB_TABLE_URL;
-    $sql     = "SELECT `keyword` FROM `$table` WHERE `url` = :url";
+    $ydb     = yourls_get_db('read-get_longurl_keywords');
 
-    if (in_array($order, array('ASC','DESC'))) {
-        $sql .= " ORDER BY `keyword` ".$order;
+    $query = $ydb->query_builder()
+                 ->select('`keyword`')
+                 ->from($ydb->table(YOURLS_DB_TABLE_URL))
+                 ->where('`url` = :url');
+
+    // Only a known sort direction is ever interpolated into the query
+    if (in_array($order, array('ASC','DESC'), true)) {
+        $query->orderBy('`keyword`', $order);
     }
 
-    return yourls_apply_filter( 'get_longurl_keywords', yourls_get_db('read-get_longurl_keywords')->fetchCol($sql, array('url'=>$longurl)), $longurl );
+    return yourls_apply_filter( 'get_longurl_keywords', $ydb->fetchCol($query->getSQL(), array('url'=>$longurl)), $longurl );
 }
