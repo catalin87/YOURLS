@@ -142,3 +142,36 @@ function yourls_set_db($db) {
         $ydb = $db;
     }
 }
+
+/**
+ * Helper function: return the Doctrine DBAL connector for QueryBuilder-based access.
+ *
+ * Modern YOURLS code that wants to build queries with Doctrine's QueryBuilder or use the
+ * secure prefixed-table helper should call this:
+ *
+ *     $db = yourls_get_db_connector('read-fetch_keyword');
+ *     if ($db) {
+ *         $row = $db->queryBuilder()
+ *             ->select('*')
+ *             ->from($db->table('url'))              // safe, validated, quoted prefix
+ *             ->where('keyword = :keyword')
+ *             ->setParameter('keyword', $keyword)     // values are always bound
+ *             ->executeQuery()
+ *             ->fetchAssociative();
+ *     }
+ *
+ * Returns null when the Doctrine backend is not active (e.g. doctrine/dbal not installed), in
+ * which case callers should use the yourls_get_db()->fetch*() methods, which keep working on
+ * the legacy engine.
+ *
+ * @since  1.11
+ * @param  string $context Optional context, same semantics as yourls_get_db().
+ * @return \YOURLS\Database\DoctrineConnector|null
+ */
+function yourls_get_db_connector($context = '') {
+    $ydb = yourls_get_db($context);
+    if ($ydb instanceof \YOURLS\Database\YDB) {
+        return $ydb->connector();
+    }
+    return null;
+}

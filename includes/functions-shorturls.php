@@ -539,8 +539,25 @@ function yourls_get_keyword_infos( $keyword, $use_cache = true ) {
 
     yourls_do_action( 'get_keyword_not_cached', $keyword );
 
-    $table = YOURLS_DB_TABLE_URL;
-    $infos = $ydb->fetchObject("SELECT * FROM `$table` WHERE `keyword` = :keyword", array('keyword' => $keyword));
+    // Modern path: build the query with Doctrine DBAL's QueryBuilder, using the secure
+    // prefixed-table helper for the identifier and a bound parameter for the value. The row
+    // is returned as a \stdClass object to preserve strict backward compatibility with the
+    // legacy code (and plugins) that consume $infos as an object.
+    $connector = yourls_get_db_connector('read-get_keyword_infos');
+    if ( $connector ) {
+        $row = $connector->queryBuilder()
+            ->select('*')
+            ->from( $connector->table('url') )      // <prefix>url, validated + quoted
+            ->where('keyword = :keyword')
+            ->setParameter('keyword', $keyword)      // value is always bound, never interpolated
+            ->executeQuery()
+            ->fetchAssociative();
+        $infos = $row === false ? false : (object) $row;
+    } else {
+        // Legacy engine fallback: fetchObject already returns a \stdClass|false.
+        $table = YOURLS_DB_TABLE_URL;
+        $infos = $ydb->fetchObject("SELECT * FROM `$table` WHERE `keyword` = :keyword", array('keyword' => $keyword));
+    }
 
     if( $infos ) {
         $infos = (array)$infos;

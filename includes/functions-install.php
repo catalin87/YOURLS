@@ -257,15 +257,40 @@ function yourls_create_sql_tables(): array {
     $debug = yourls_get_debug_mode();
     yourls_debug_mode(true);
 
-    // Create tables
-    foreach ( $create_tables as $table_name => $table_query ) {
-        $ydb->perform( $table_query );
-        $create_success = $ydb->fetchAffected( "SHOW TABLES LIKE '$table_name'" );
-        if( $create_success ) {
-            $create_table_count++;
-            $success_msg[] = yourls_s( "Table '%s' created.", $table_name );
-        } else {
-            $error_msg[] = yourls_s( "Error creating table '%s'.", $table_name );
+    /* Prefer the modern Doctrine DBAL path via \YOURLS\Database\Schema (same DDL, executed with
+     * DBAL). This keeps the web installer consistent with `bin/console yourls:install`. When the
+     * Doctrine backend is not active, we fall back to the legacy per-statement path below. Either
+     * way the resulting schema is identical.
+     */
+    $connector = function_exists('yourls_get_db_connector')
+        ? yourls_get_db_connector('write-create_sql_tables')
+        : null;
+
+    if ( $connector ) {
+        try {
+            $results = \YOURLS\Database\Schema::createAll( $connector->getConnection() );
+            foreach ( $results as $table_name => $ok ) {
+                if ( $ok ) {
+                    $create_table_count++;
+                    $success_msg[] = yourls_s( "Table '%s' created.", $table_name );
+                } else {
+                    $error_msg[] = yourls_s( "Error creating table '%s'.", $table_name );
+                }
+            }
+        } catch ( \Throwable $e ) {
+            $error_msg[] = yourls_s( "Error creating table '%s'.", $e->getMessage() );
+        }
+    } else {
+        // Legacy engine fallback: create tables one statement at a time.
+        foreach ( $create_tables as $table_name => $table_query ) {
+            $ydb->perform( $table_query );
+            $create_success = $ydb->fetchAffected( "SHOW TABLES LIKE '$table_name'" );
+            if( $create_success ) {
+                $create_table_count++;
+                $success_msg[] = yourls_s( "Table '%s' created.", $table_name );
+            } else {
+                $error_msg[] = yourls_s( "Error creating table '%s'.", $table_name );
+            }
         }
     }
 

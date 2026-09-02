@@ -76,6 +76,19 @@ class YDB extends ExtendedPdo {
     private bool $bypass_shunt_filter = false;
 
     /**
+     * Optional Doctrine DBAL backend.
+     *
+     * When present, all fetch_* / perform operations are executed through Doctrine DBAL
+     * (via \YOURLS\Database\DoctrineConnector) instead of the legacy Aura\Sql parent methods.
+     * The DoctrineConnector reproduces the exact same row shapes (stdClass vs. array), so this
+     * swap is transparent to every caller. When null (e.g. doctrine/dbal not installed yet),
+     * YDB transparently falls back to the Aura\Sql\ExtendedPdo parent implementation.
+     *
+     * @var DoctrineConnector|null
+     */
+    protected ?DoctrineConnector $doctrine = null;
+
+    /**
      * @since 1.7.3
      * @param string $dsn     The data source name
      * @param string $user    The username
@@ -103,6 +116,76 @@ class YDB extends ExtendedPdo {
         $this->set_emulate_state();
 
         $this->start_profiler();
+
+        $this->init_doctrine();
+    }
+
+    /**
+     * Attach a Doctrine DBAL backend if the library is available.
+     *
+     * This is what actually switches the query engine from Aura\Sql to Doctrine DBAL. It is
+     * defensive: if doctrine/dbal is not installed (e.g. `composer install` hasn't run yet in a
+     * given environment), or if building the connection fails for any reason, we silently keep
+     * the legacy Aura path so YOURLS remains functional. The switch can also be disabled with
+     * the `use_doctrine_dbal` filter or by defining YOURLS_NO_DOCTRINE.
+     *
+     * @since  1.11
+     * @return void
+     */
+    public function init_doctrine() {
+        // Escape hatches: constant or filter can force the legacy engine.
+        if (defined('YOURLS_NO_DOCTRINE') && YOURLS_NO_DOCTRINE) {
+            return;
+        }
+        if (function_exists('yourls_apply_filter')
+            && !yourls_apply_filter('use_doctrine_dbal', true)) {
+            return;
+        }
+
+        if (!class_exists(\Doctrine\DBAL\DriverManager::class)) {
+            return;
+        }
+
+        try {
+            // Reuse the very DSN/user/pass/options this YDB was constructed with, so the
+            // Doctrine connection is identical (host, port, charset) to the PDO one.
+            [$dsn, $user, $pass, $options] = array_pad($this->args, 4, null);
+            $this->doctrine = DoctrineConnector::fromDsn(
+                (string) $dsn,
+                (string) $user,
+                (string) $pass,
+                is_array($options) ? $options : []
+            );
+        } catch (\Throwable $e) {
+            // Doctrine unavailable/misconfigured: stay on the legacy engine, but leave a trace.
+            $this->doctrine = null;
+            if (function_exists('yourls_debug_log')) {
+                yourls_debug_log('Doctrine DBAL init failed, using legacy engine: ' . $e->getMessage());
+            }
+        }
+    }
+
+    /**
+     * Whether this YDB is currently backed by Doctrine DBAL.
+     *
+     * @since  1.11
+     * @return bool
+     */
+    public function has_doctrine(): bool {
+        return $this->doctrine instanceof DoctrineConnector;
+    }
+
+    /**
+     * Access the Doctrine DBAL connector (for QueryBuilder / secure table() helpers).
+     *
+     * Returns null when the legacy engine is in use. Prefer the yourls_get_db_connector()
+     * helper in application code.
+     *
+     * @since  1.11
+     * @return DoctrineConnector|null
+     */
+    public function connector(): ?DoctrineConnector {
+        return $this->doctrine;
     }
 
     /**
@@ -587,6 +670,13 @@ class YDB extends ExtendedPdo {
 
         // Filter the query statement
         $args[0] = yourls_apply_filter('fetch_wrapper_statement', $args[0], $method, $args);
+
+        // Modern path: execute through Doctrine DBAL when available. DoctrineConnector exposes
+        // the same method names and produces identical row shapes (stdClass vs. array), so this
+        // is a transparent swap. Falls through to the Aura parent when Doctrine isn't attached.
+        if ($this->doctrine !== null && method_exists($this->doctrine, $method)) {
+            return $this->doctrine->$method( ...$args);
+        }
 
         return parent::$method( ...$args);
     }

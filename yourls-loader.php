@@ -1,12 +1,26 @@
 <?php
-// Handle inexistent root favicon requests and exit
+/**
+ * YOURLS front controller.
+ *
+ * Modernized to dispatch through a Symfony Routing + HttpFoundation kernel
+ * (\YOURLS\Router\Kernel) instead of ad-hoc global variables. The kernel:
+ *   - fires the legacy `pre_load_template` action before dispatch,
+ *   - captures direct `echo` output from legacy templates/plugins into the Response,
+ *   - survives legacy `exit()`/`die()` calls inside hooks via an output-buffer shutdown net.
+ *
+ * If the Symfony components are not installed yet (e.g. `composer install` has not run in a
+ * given environment), we transparently fall back to the original procedural dispatch so YOURLS
+ * keeps working. Behavior is identical either way.
+ */
+
+// Handle inexistent root favicon requests and exit (kept pre-bootstrap for speed)
 if ( '/favicon.ico' == $_SERVER['REQUEST_URI'] ) {
     header( 'Content-Type: image/gif' );
     echo base64_decode( "R0lGODlhEAAQAJECAAAAzFZWzP///wAAACH5BAEAAAIALAAAAAAQABAAAAIplI+py+0PUQAgSGoNQFt0LWTVOE6GuX1H6onTVHaW2tEHnJ1YxPc+UwAAOw==" );
     exit;
 }
 
-// Handle inexistent root robots.txt requests and exit
+// Handle inexistent root robots.txt requests and exit (kept pre-bootstrap for speed)
 if ( '/robots.txt' == $_SERVER['REQUEST_URI'] ) {
     header( 'Content-Type: text/plain; charset=utf-8' );
     echo "User-agent: *\n";
@@ -16,6 +30,20 @@ if ( '/robots.txt' == $_SERVER['REQUEST_URI'] ) {
 
 // Load YOURLS
 require_once __DIR__ . '/includes/load-yourls.php';
+
+// Modern dispatch: Symfony Routing + HttpFoundation kernel.
+if ( class_exists( \YOURLS\Router\Kernel::class )
+     && class_exists( \Symfony\Component\HttpFoundation\Request::class ) ) {
+
+    $kernel = new \YOURLS\Router\Kernel();
+    $kernel->handleAndSend();
+    exit;
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Legacy fallback dispatch (used only when Symfony HttpFoundation/Routing is not installed).
+ * This is the original procedural loader, preserved verbatim for backward compatibility.
+ * ------------------------------------------------------------------------------------------- */
 
 // Get request in YOURLS base (eg in 'http://sho.rt/yourls/abcd' get 'abdc')
 // At this point, $request is NOT sanitized.

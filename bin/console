@@ -1,0 +1,41 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * YOURLS command-line entry point.
+ *
+ * Usage:
+ *   php bin/console yourls:install            Install YOURLS (create tables via Doctrine migrations)
+ *   php bin/console migrations:migrate        Apply pending Doctrine migrations (if doctrine/migrations installed)
+ *   php bin/console migrations:status         Show migration status
+ *   php bin/console list                      List all available commands
+ *
+ * This requires `composer install` to have pulled in symfony/console (and, for schema work,
+ * doctrine/dbal + doctrine/migrations).
+ *
+ * @since 1.11
+ */
+
+// Only run from CLI.
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "bin/console must be run from the command line.\n");
+    exit(1);
+}
+
+$root = dirname(__DIR__);
+
+// Load the Composer autoloader (vendor-dir is includes/vendor for YOURLS).
+$autoload = $root . '/includes/vendor/autoload.php';
+if (!is_file($autoload)) {
+    fwrite(STDERR, "Composer dependencies are not installed. Run `composer install` first.\n");
+    exit(1);
+}
+require $autoload;
+
+if (!class_exists(\Symfony\Component\Console\Application::class)) {
+    fwrite(STDERR, "symfony/console is not installed. Run `composer install` first.\n");
+    exit(1);
+}
+
+$application = \YOURLS\Console\Application::create();
+$application->run();
