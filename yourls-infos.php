@@ -35,7 +35,8 @@ yourls_do_action( 'pre_yourls_infos', $keyword );
 
 if( yourls_do_log_redirect() ) {
 
-    $table = YOURLS_DB_TABLE_LOG;
+    $table = YOURLS\Database\TableRegistry::get('log');
+    $ydb = yourls_get_db('read-infos_stats');
     $referrers = array();
     $direct = $notdirect = 0;
     $countries = array();

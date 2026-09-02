@@ -19,9 +19,7 @@ function yourls_db_connect($context = '') {
     }
 
     $dbhost = YOURLS_DB_HOST;
-    $user = YOURLS_DB_USER;
-    $pass = YOURLS_DB_PASS;
-    $dbname = YOURLS_DB_NAME;
+    $dbport = null;
 
     // This action is deprecated
     yourls_do_action( 'set_DB_driver', 'deprecated' );
@@ -29,38 +27,55 @@ function yourls_db_connect($context = '') {
     // Get custom port if any
     if (str_contains($dbhost, ':')) {
         list( $dbhost, $dbport ) = explode( ':', $dbhost );
-        $dbhost = sprintf( '%1$s;port=%2$d', $dbhost, $dbport );
+        $dbport = (int)$dbport;
     }
 
     $charset = yourls_apply_filter( 'db_connect_charset', 'utf8mb4', $context );
 
     /**
-     * Data Source Name (dsn) used to connect the DB
+     * Connection parameters handed over to Doctrine DBAL's DriverManager
      *
-     * DSN with PDO is something like:
-     * 'mysql:host=123.4.5.6;dbname=test_db;port=3306'
-     * 'sqlite:/opt/databases/mydb.sq3'
-     * 'pgsql:host=192.168.13.37;port=5432;dbname=omgwtf'
+     * Since 1.11 YOURLS connects through Doctrine DBAL rather than raw PDO, so the connection is
+     * described by an array rather than a DSN string, eg:
+     * ['driver' => 'pdo_mysql', 'host' => '123.4.5.6', 'dbname' => 'test_db', 'port' => 3306]
+     * ['driver' => 'pdo_sqlite', 'path' => '/opt/databases/mydb.sq3']
+     * ['driver' => 'pdo_pgsql', 'host' => '192.168.13.37', 'port' => 5432, 'dbname' => 'omgwtf']
      */
-    $dsn = sprintf( 'mysql:host=%s;dbname=%s;charset=%s', $dbhost, $dbname, $charset );
-    $dsn = yourls_apply_filter( 'db_connect_custom_dsn', $dsn, $context );
+    $params = [
+        'driver'   => 'pdo_mysql',
+        'host'     => $dbhost,
+        'dbname'   => YOURLS_DB_NAME,
+        'user'     => YOURLS_DB_USER,
+        'password' => YOURLS_DB_PASS,
+        'charset'  => $charset,
+    ];
+    if ($dbport !== null) {
+        $params['port'] = $dbport;
+    }
 
     /**
      * PDO driver options and attributes
      *
-     * The PDO constructor is something like:
-     *   new PDO( string $dsn, string $username, string $password [, array $options ] )
-     * The driver options are passed to the PDO constructor, eg array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION)
-     * The attribute options are then set in a foreach($attr as $k=>$v){$db->setAttribute($k, $v)} loop
+     * Driver options are passed through to the underlying PDO constructor,
+     * eg array(PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION)
      */
     $driver_options = yourls_apply_filter( 'db_connect_driver_option', [], $context ); // driver options as key-value pairs
     $attributes = yourls_apply_filter( 'db_connect_attributes', [], $context ); // attributes as key-value pairs
+    if ($driver_options || $attributes) {
+        $params['driverOptions'] = $driver_options + $attributes;
+    }
 
-    $ydb = new \YOURLS\Database\YDB( $dsn, $user, $pass, $driver_options, $attributes );
+    /**
+     * The 'db_connect_custom_dsn' filter is deprecated since 1.11 (there is no DSN string anymore).
+     * Use 'db_connect_params' to alter the DBAL connection parameters instead.
+     */
+    $params = yourls_apply_filter( 'db_connect_params', $params, $context );
+
+    $ydb = \YOURLS\Database\YDB::from_params( $params );
     $ydb->init();
 
     // Past this point, we're connected
-    yourls_debug_log( 'Connected to ' . $dsn );
+    yourls_debug_log( sprintf( 'Connected to %s@%s/%s', $params['user'] ?? '', $params['host'] ?? '', $params['dbname'] ?? '' ) );
 
     yourls_debug_mode( YOURLS_DEBUG );
 

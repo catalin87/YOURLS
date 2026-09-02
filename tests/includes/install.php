@@ -58,8 +58,13 @@ function yut_drop_all_tables_if_local() {
     if( !yut_is_local() )
         return;
 
-    // If not running in Travis environment, drop any tables from the selected database prior to starting tests
-    $tables = sprintf('%s,%s,%s', YOURLS_DB_TABLE_URL, YOURLS_DB_TABLE_OPTIONS, YOURLS_DB_TABLE_LOG);
-    $sql = sprintf('DROP TABLE IF EXISTS %s', $tables);
+    /* If not running in Travis environment, drop any tables from the selected database prior to
+     * starting tests. The Doctrine migrations metadata table goes too: leaving it behind would make
+     * the installer believe the (now dropped) tables are still there.
+     */
+    $tables = array_values(\YOURLS\Database\TableRegistry::all());
+    $tables[] = \YOURLS\Database\TableRegistry::validate(YOURLS_DB_PREFIX.'migration_versions');
+
+    $sql = sprintf('DROP TABLE IF EXISTS `%s`', implode('`,`', $tables));
     yourls_get_db('write-drop_tables_if_local')->perform($sql);
 }

@@ -1,6 +1,6 @@
 ############
 ## YOURLS
-
+includes/vendor
 # Ignore server configuration files
 .htaccess
 *.config

@@ -35,27 +35,24 @@ class Logger extends AbstractLogger {
      *    $context : array()
      * See yourls_debug() in includes/functions-debug.php
      *
-     * From a query that triggers the internal logging of Aura SQL :
+     * From a query that triggers the internal logging of the YOURLS profiler :
      *    $level   : string 'query'
-     *    $message : string '{function} ({duration} seconds): {statement} {backtrace}'
-     *               (which is the default $logFormat from Aura\Sql\Profiler\Profiler), we're not using it)
+     *    $message : string '' (unused, the message is built from $context)
      *    $context : array(
      *               'function' => string 'perform'
      *               'duration' => float 0.0025360584259033
      *               'statement' => string 'SELECT `keyword`,`url` FROM `yourls_url` WHERE `url` LIKE (:url)'
      *               'values' => array('url' => '%rss%')
      *               )
-     * See finish() in Aura\Sql\Profiler\Profiler
+     * See finish() in \YOURLS\Database\Profiler
      *
      * @return void
      */
     public function log($level, string|\Stringable $message, array $context = []): void {
         // if it's an internal SQL query, format the message, otherwise store a string
         if($level === 'query') {
-            // Get the real function name that called the query (not just "perform")
-            $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 6);
-            // We should have at index 5 "fetchSomething" (eg fetchAll, fetchOne, etc), otherwise make it "perform"
-            $function = $backtrace[5]['function'] ?? 'perform';
+            // The DB layer tells us which of its methods ran the query (eg fetchAll, fetchOne, ...)
+            $function = $context['function'] ?? 'perform';
             $context['function'] = str_starts_with($function, 'fetch') ? $function : 'perform';
             $this->messages[] = sprintf(
                 'SQL %s: %s (%s s)',

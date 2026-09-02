@@ -1,0 +1,90 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * YOURLS command line interface
+ *
+ * Usage:
+ *   php bin/console yourls:install          Install YOURLS (create tables, seed options & samples)
+ *   php bin/console migrations:migrate      Run Doctrine migrations directly
+ *   php bin/console list                    List all available commands
+ *
+ * @since 1.11
+ */
+
+if (PHP_SAPI !== 'cli') {
+    fwrite(STDERR, "bin/console must be run from the command line.\n");
+    exit(1);
+}
+
+// We're installing: don't let the bootstrap redirect us to the web installer, and don't let the
+// "is YOURLS installed?" check die on a database that has no tables yet.
+define('YOURLS_INSTALLING', true);
+
+require_once __DIR__.'/../includes/vendor/autoload.php';
+
+$config = new \YOURLS\Config\Config();
+if (!defined('YOURLS_CONFIGFILE')) {
+    try {
+        define('YOURLS_CONFIGFILE', $config->find_config());
+    } catch (\YOURLS\Exceptions\ConfigException $e) {
+        fwrite(STDERR, $e->getMessage()."\n");
+        exit(1);
+    }
+}
+
+/* Required at global scope so user defined variables in config.php (eg $yourls_user_passwords)
+ * land in the global scope, exactly like includes/load-yourls.php does it.
+ */
+require_once YOURLS_CONFIGFILE;
+
+try {
+    $config->define_core_constants();
+} catch (\YOURLS\Exceptions\ConfigException $e) {
+    fwrite(STDERR, $e->getMessage()."\n");
+    exit(1);
+}
+
+/* Bootstrap the core, minus everything that only makes sense when serving a web request.
+ *
+ * The database is deliberately left alone here: connecting (and reading options, and loading
+ * plugins, which both need a working schema) would abort the whole console on a machine whose
+ * database is empty or misconfigured - which is precisely when `yourls:install` is needed.
+ * Commands connect on demand, through yourls_get_db().
+ */
+$init_defaults = new \YOURLS\Config\InitDefaults();
+$init_defaults->fix_request_uri         = false;
+$init_defaults->redirect_ssl            = false;
+$init_defaults->redirect_to_install     = false;
+$init_defaults->check_if_upgrade_needed = false;
+$init_defaults->check_new_version       = false;
+$init_defaults->init_admin              = false;
+$init_defaults->include_db              = false;
+$init_defaults->get_all_options         = false;
+$init_defaults->load_plugins            = false;
+new \YOURLS\Config\Init($init_defaults);
+
+// yourls_get_db() lives in the DB engine file that include_db would normally have pulled in
+require_once YOURLS_INC.'/class-mysql.php';
+
+$application = new \Symfony\Component\Console\Application('YOURLS', YOURLS_VERSION);
+$application->addCommands([new \YOURLS\Console\InstallCommand()]);
+
+/* Expose the Doctrine migration commands (migrations:migrate, migrations:status, ...) so admins
+ * can drive the schema directly. They share the connection YOURLS is already using.
+ *
+ * The factory resolves its connection on first use, so listing or describing commands does not
+ * dial the database - which would blow up on exactly the broken-database machine where
+ * `yourls:install` is the command you need.
+ */
+$migrations = \YOURLS\Database\Migrations::lazy_dependency_factory();
+$application->addCommands([
+    new \Doctrine\Migrations\Tools\Console\Command\MigrateCommand($migrations),
+    new \Doctrine\Migrations\Tools\Console\Command\StatusCommand($migrations),
+    new \Doctrine\Migrations\Tools\Console\Command\ListCommand($migrations),
+    new \Doctrine\Migrations\Tools\Console\Command\UpToDateCommand($migrations),
+    new \Doctrine\Migrations\Tools\Console\Command\ExecuteCommand($migrations),
+    new \Doctrine\Migrations\Tools\Console\Command\CurrentCommand($migrations),
+]);
+
+$application->run();

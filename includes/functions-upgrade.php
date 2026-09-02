@@ -94,7 +94,7 @@ function yourls_upgrade($step, $oldver, $newver, $oldsql, $newsql ) {
 function yourls_upgrade_to_507() {
     echo "<p>Adding index for url column. Please wait...</p>";
 
-    $table = YOURLS_DB_TABLE_URL;
+    $table = \YOURLS\Database\TableRegistry::get('url');
 
     $query = sprintf("ALTER TABLE `%s` ADD INDEX `url_idx` (`url`(50));", $table);
 
@@ -119,7 +119,7 @@ function yourls_upgrade_to_507() {
 function yourls_upgrade_505_to_506() {
     echo "<p>Updating DB. Please wait...</p>";
     // Fix collation which was wrongly set at first to utf8mb4_unicode_ci
-    $query = sprintf('ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;', YOURLS_DB_TABLE_URL);
+    $query = sprintf('ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;', \YOURLS\Database\TableRegistry::get('url'));
 
     try {
         yourls_get_db('write-upgrade_505_to_506')->perform($query);
@@ -147,11 +147,11 @@ function yourls_upgrade_to_506() {
 
     $queries = array(
         'database charset'     => sprintf('ALTER DATABASE `%s` CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci;', YOURLS_DB_NAME),
-        'options charset'      => sprintf('ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;', YOURLS_DB_TABLE_OPTIONS),
-        'short URL varchar'    => sprintf("ALTER TABLE `%s` CHANGE `keyword` `keyword` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';", YOURLS_DB_TABLE_URL),
-        'short URL type url'   => sprintf("ALTER TABLE `%s` CHANGE `url` `url` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;", YOURLS_DB_TABLE_URL),
-        'short URL type title' => sprintf("ALTER TABLE `%s` CHANGE `title` `title` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", YOURLS_DB_TABLE_URL),
-        'short URL charset'    => sprintf('ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;', YOURLS_DB_TABLE_URL),
+        'options charset'      => sprintf('ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;', \YOURLS\Database\TableRegistry::get('options')),
+        'short URL varchar'    => sprintf("ALTER TABLE `%s` CHANGE `keyword` `keyword` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL DEFAULT '';", \YOURLS\Database\TableRegistry::get('url')),
+        'short URL type url'   => sprintf("ALTER TABLE `%s` CHANGE `url` `url` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL;", \YOURLS\Database\TableRegistry::get('url')),
+        'short URL type title' => sprintf("ALTER TABLE `%s` CHANGE `title` `title` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", \YOURLS\Database\TableRegistry::get('url')),
+        'short URL charset'    => sprintf('ALTER TABLE `%s` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;', \YOURLS\Database\TableRegistry::get('url')),
     );
 
     foreach($queries as $what => $query) {
@@ -185,7 +185,7 @@ function yourls_upgrade_to_506() {
  */
 function yourls_upgrade_482() {
     // Change URL title charset to UTF8
-    $table_url = YOURLS_DB_TABLE_URL;
+    $table_url = \YOURLS\Database\TableRegistry::get('url');
     $sql = "ALTER TABLE `$table_url` CHANGE `title` `title` TEXT CHARACTER SET utf8;";
     yourls_get_db('write-upgrade_482')->perform( $sql );
     echo "<p>Updating table structure. Please wait...</p>";
@@ -204,7 +204,7 @@ function yourls_upgrade_to_15( ) {
     echo "<p>Enabling the plugin API. Please wait...</p>";
 
     // Alter URL table to store titles
-    $table_url = YOURLS_DB_TABLE_URL;
+    $table_url = \YOURLS\Database\TableRegistry::get('url');
     $sql = "ALTER TABLE `$table_url` ADD `title` TEXT AFTER `url`;";
     yourls_get_db('write-upgrade_to_15')->perform( $sql );
     echo "<p>Updating table structure. Please wait...</p>";
@@ -223,12 +223,12 @@ function yourls_upgrade_to_15( ) {
 function yourls_upgrade_to_143( ) {
     // Check if we have 'keyword' (borked install) or 'shorturl' (ok install)
     $ydb = yourls_get_db('write-upgrade_to_143');
-    $table_log = YOURLS_DB_TABLE_LOG;
+    $table_log = \YOURLS\Database\TableRegistry::get('log');
     $sql = "SHOW COLUMNS FROM `$table_log`";
     $cols = $ydb->fetchObjects( $sql );
     if ( $cols[2]->Field == 'keyword' ) {
         $sql = "ALTER TABLE `$table_log` CHANGE `keyword` `shorturl` VARCHAR( 200 ) BINARY;";
-        $ydb->query( $sql );
+        $ydb->perform( $sql );
     }
     echo "<p>Structure of existing tables updated. Please wait...</p>";
 }
@@ -254,7 +254,7 @@ function yourls_upgrade_to_141( ) {
  *
  */
 function yourls_alter_url_table_to_141() {
-    $table_url = YOURLS_DB_TABLE_URL;
+    $table_url = \YOURLS\Database\TableRegistry::get('url');
     $alter = "ALTER TABLE `$table_url` CHANGE `keyword` `keyword` VARCHAR( 200 ) BINARY, CHANGE `url` `url` TEXT BINARY ";
     yourls_get_db('write-alter_url_table_to_141')->perform( $alter );
     echo "<p>Structure of existing tables updated. Please wait...</p>";
@@ -309,8 +309,11 @@ function yourls_update_options_to_14() {
     yourls_update_option( 'db_version', '200' );
 
     if( defined('YOURLS_DB_TABLE_NEXTDEC') ) {
-        $table = YOURLS_DB_TABLE_NEXTDEC;
-        $next_id = yourls_get_db('read-update_options_to_14')->fetchValue("SELECT `next_id` FROM `$table`");
+        $table = \YOURLS\Database\TableRegistry::validate(YOURLS_DB_TABLE_NEXTDEC);
+        $ydb = yourls_get_db('read-update_options_to_14');
+        $next_id = $ydb->fetch_from('fetchValue', $ydb->create_query_builder()
+            ->select('`next_id`')
+            ->from($table));
         yourls_update_option( 'next_id', $next_id );
         yourls_get_db('write-update_options_to_14')->perform( "DROP TABLE `$table`" );
     } else {
@@ -327,8 +330,8 @@ function yourls_create_tables_for_14() {
 
     $queries = array();
 
-    $queries[YOURLS_DB_TABLE_OPTIONS] =
-        'CREATE TABLE IF NOT EXISTS `'.YOURLS_DB_TABLE_OPTIONS.'` ('.
+    $queries[\YOURLS\Database\TableRegistry::get('options')] =
+        'CREATE TABLE IF NOT EXISTS `'.\YOURLS\Database\TableRegistry::get('options').'` ('.
         '`option_id` int(11) unsigned NOT NULL auto_increment,'.
         '`option_name` varchar(64) NOT NULL default "",'.
         '`option_value` longtext NOT NULL,'.
@@ -336,8 +339,8 @@ function yourls_create_tables_for_14() {
         'KEY `option_name` (`option_name`)'.
         ');';
 
-    $queries[YOURLS_DB_TABLE_LOG] =
-        'CREATE TABLE IF NOT EXISTS `'.YOURLS_DB_TABLE_LOG.'` ('.
+    $queries[\YOURLS\Database\TableRegistry::get('log')] =
+        'CREATE TABLE IF NOT EXISTS `'.\YOURLS\Database\TableRegistry::get('log').'` ('.
         '`click_id` int(11) NOT NULL auto_increment,'.
         '`click_time` datetime NOT NULL,'.
         '`shorturl` varchar(200) NOT NULL,'.
@@ -363,7 +366,7 @@ function yourls_create_tables_for_14() {
  */
 function yourls_alter_url_table_to_14() {
     $ydb = yourls_get_db('write-alter_url_table_to_14');
-    $table = YOURLS_DB_TABLE_URL;
+    $table = \YOURLS\Database\TableRegistry::get('url');
 
     $alters = array();
     $results = array();
@@ -384,7 +387,7 @@ function yourls_alter_url_table_to_14() {
  */
 function yourls_alter_url_table_to_14_part_two() {
     $ydb = yourls_get_db('write-alter_url_table_to_14_part_two');
-    $table = YOURLS_DB_TABLE_URL;
+    $table = \YOURLS\Database\TableRegistry::get('url');
 
     $alters = array();
     $alters[] = "ALTER TABLE `$table` ADD PRIMARY KEY ( `keyword` )";
@@ -404,7 +407,7 @@ function yourls_alter_url_table_to_14_part_two() {
  */
 function yourls_update_table_to_14() {
     $ydb = yourls_get_db('write-update_table_to_14');
-    $table = YOURLS_DB_TABLE_URL;
+    $table = \YOURLS\Database\TableRegistry::get('url');
 
     // Modify each link to reflect new structure
     $chunk = 45;
@@ -412,9 +415,13 @@ function yourls_update_table_to_14() {
     $total = yourls_get_db_stats();
     $total = $total['total_links'];
 
-    $sql = "SELECT `keyword`,`url` FROM `$table` WHERE 1=1 ORDER BY `url` ASC LIMIT $from, $chunk ;";
-
-    $rows = $ydb->fetchObjects($sql);
+    $rows = $ydb->fetch_from('fetchObjects', $ydb->create_query_builder()
+        ->select('`keyword`', '`url`')
+        ->from($table)
+        ->where('1=1')
+        ->orderBy('`url`', 'ASC')
+        ->setFirstResult((int)$from)
+        ->setMaxResults((int)$chunk));
 
     $count = 0;
     $queries = 0;
@@ -422,7 +429,12 @@ function yourls_update_table_to_14() {
         $keyword = $row->keyword;
         $url = $row->url;
         $newkeyword = yourls_int2string( $keyword );
-        if( true === $ydb->perform("UPDATE `$table` SET `keyword` = '$newkeyword' WHERE `url` = '$url';") ) {
+        $updated = $ydb->fetch_from('fetchAffected', $ydb->create_query_builder()
+            ->update($table)
+            ->set('`keyword`', ':newkeyword')
+            ->where('`url` = :url')
+            ->setParameters(['newkeyword' => $newkeyword, 'url' => $url]));
+        if( $updated > 0 ) {
             $queries++;
         } else {
             echo "<p>Huho... Could not update rown with url='$url', from keyword '$keyword' to keyword '$newkeyword'</p>"; // Find what went wrong :/

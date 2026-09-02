@@ -18,7 +18,7 @@
 namespace YOURLS\Database;
 
 use YOURLS\Database\YDB;
-use PDOException;
+use Doctrine\DBAL\Exception as DBALException;
 
 class Options {
 
@@ -42,24 +42,25 @@ class Options {
      */
     public function get_all_options() {
         // Get option values from DB
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "SELECT option_name, option_value FROM $table WHERE 1=1";
+        $table = TableRegistry::get('options');
 
         try {
-            $options = (array) $this->ydb->fetchPairs($sql);
+            $options = (array) $this->ydb->fetch_from('fetchPairs', $this->ydb->create_query_builder()
+                ->select('option_name', 'option_value')
+                ->from($table)
+                ->where('1=1'));
 
-        } catch ( PDOException $e ) {
+        } catch ( DBALException $e ) {
 
             // We could not fetch value from the table. Let's check if the option table exists
             try {
-                $check = $this->ydb->fetchAffected(sprintf("SHOW TABLES LIKE '%s'", $table));
                 // Table doesn't exist
-                if ($check ==0) {
+                if (!$this->ydb->get_connection()->createSchemaManager()->tablesExist([$table])) {
                     return false;
                 }
 
             // Error at this point means the database isn't readable
-            } catch ( PDOException $e ) {
+            } catch ( DBALException $e ) {
                 $this->ydb->dead_or_error($e);
             }
 
@@ -101,13 +102,16 @@ class Options {
         }
 
         // Get option value from DB
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "SELECT option_value FROM $table WHERE option_name = :option_name LIMIT 1";
-        $bind = array('option_name' => $name);
+        $table = TableRegistry::get('options');
 
         // Use fechOne() to get array('option_value'=>$value), or false if not found.
         // This way, we can effectively store false as an option value, and not confuse with false as the default return value
-        $value = $this->ydb->fetchOne($sql, $bind);
+        $value = $this->ydb->fetch_from('fetchOne', $this->ydb->create_query_builder()
+            ->select('option_value')
+            ->from($table)
+            ->where('option_name = :option_name')
+            ->setMaxResults(1)
+            ->setParameter('option_name', $name));
         if($value !== false) {
             $value = yourls_maybe_unserialize( $value['option_value'] );
             // Cache option value to save a DB query if needed later
@@ -160,10 +164,12 @@ class Options {
         }
 
         $_newvalue = yourls_maybe_serialize($newvalue);
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql  = "UPDATE $table SET option_value = :value WHERE option_name = :name";
-        $bind = array('name' => $name, 'value' => $_newvalue);
-        $do   = $this->ydb->fetchAffected($sql, $bind);
+        $table = TableRegistry::get('options');
+        $do   = $this->ydb->fetch_from('fetchAffected', $this->ydb->create_query_builder()
+            ->update($table)
+            ->set('option_value', ':value')
+            ->where('option_name = :name')
+            ->setParameters(array('name' => $name, 'value' => $_newvalue)));
 
         if($do !== 1) {
             // Something went wrong :(
@@ -204,11 +210,12 @@ class Options {
             // return false;
         // }
 
-        $table = YOURLS_DB_TABLE_OPTIONS;
+        $table = TableRegistry::get('options');
         $_value = yourls_maybe_serialize($value);
-        $sql  = "INSERT INTO $table (option_name, option_value) VALUES (:name, :value)";
-        $bind = array('name' => $name, 'value' => $_value);
-        $do   = $this->ydb->fetchAffected($sql, $bind);
+        $do   = $this->ydb->fetch_from('fetchAffected', $this->ydb->create_query_builder()
+            ->insert($table)
+            ->values(array('option_name' => ':name', 'option_value' => ':value'))
+            ->setParameters(array('name' => $name, 'value' => $_value)));
 
         if($do !== 1) {
             // Something went wrong :(
@@ -236,10 +243,11 @@ class Options {
             return false;
         }
 
-        $table = YOURLS_DB_TABLE_OPTIONS;
-        $sql = "DELETE FROM $table WHERE option_name = :name";
-        $bind = array('name' => $name);
-        $do   = $this->ydb->fetchAffected($sql, $bind);
+        $table = TableRegistry::get('options');
+        $do   = $this->ydb->fetch_from('fetchAffected', $this->ydb->create_query_builder()
+            ->delete($table)
+            ->where('option_name = :name')
+            ->setParameter('name', $name));
 
         if($do !== 1) {
             // Something went wrong :(

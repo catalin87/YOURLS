@@ -4,7 +4,7 @@ require_once( dirname( __DIR__ ).'/includes/load-yourls.php' );
 yourls_maybe_require_auth();
 
 // Variables
-$table_url       = YOURLS_DB_TABLE_URL;
+$table_url       = YOURLS\Database\TableRegistry::get('url');
 $search_sentence = $search_text = $url = $keyword = '';
 $base_page       = yourls_admin_url('index.php');
 $where           = array('sql' => '', 'binds' => array());
@@ -301,7 +301,19 @@ yourls_table_tbody_start();
 
 // Main Query
 $where = yourls_apply_filter( 'admin_list_where', $where );
-$url_results = yourls_get_db('read-admin_index')->fetchObjects( "SELECT * FROM `$table_url` WHERE 1=1 {$where['sql']} ORDER BY `$sort_by` $sort_order LIMIT $offset, $perpage;", $where['binds'] );
+$ydb = yourls_get_db('read-admin_index');
+/* AdminParams checks $sort_by against a whitelist, but that whitelist (and the default) are
+ * filterable, so quote the column rather than trusting it. $where['sql'] is a raw fragment
+ * carrying its own bound placeholders (see $where['binds']).
+ */
+$url_results = $ydb->fetch_from('fetchObjects', $ydb->create_query_builder()
+    ->select('*')
+    ->from($table_url)
+    ->where('1=1 ' . $where['sql'])
+    ->orderBy($ydb->get_connection()->quoteSingleIdentifier($sort_by), $sort_order === 'asc' ? 'asc' : 'desc')
+    ->setFirstResult((int)$offset)
+    ->setMaxResults((int)$perpage)
+    ->setParameters($where['binds']));
 $found_rows = false;
 if( $url_results ) {
     $found_rows = true;

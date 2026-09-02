@@ -339,8 +339,13 @@ function yourls_escape( $data ) {
 function yourls_escape_real( $string ) {
     yourls_deprecated_function( __FUNCTION__, '1.7.3', 'PDO' );
     global $ydb;
-    if( isset( $ydb ) && ( $ydb instanceof \YOURLS\Database\YDB ) )
-        return $ydb->escape( $string );
+    if( isset( $ydb ) && ( $ydb instanceof \YOURLS\Database\YDB ) ) {
+        /* Quoting returns a value wrapped in quotes ("'O''Brien'"), while this function is
+         * documented to return an escaped string ("O''Brien"): trim the wrapping quotes back off.
+         * Note this used to call $ydb->escape(), which no DB backend ever implemented: it threw.
+         */
+        return trim( $ydb->quote( (string)$string ), "'" );
+    }
 
     // YOURLS DB classes have been bypassed by a custom DB engine or a custom cache layer
     return yourls_apply_filter( 'custom_escape_real', addslashes( $string ), $string );

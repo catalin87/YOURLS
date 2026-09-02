@@ -156,22 +156,26 @@ function yourls_update_clicks( $keyword, $clicks = false ) {
     }
 
     $keyword = yourls_sanitize_keyword( $keyword );
-    $table = YOURLS_DB_TABLE_URL;
-    if ( $clicks !== false && is_int( $clicks ) && $clicks >= 0 ) {
-        $update = "UPDATE `$table` SET `clicks` = :clicks WHERE `keyword` = :keyword";
-        $values = [ 'clicks' => $clicks, 'keyword' => $keyword ];
-        $update_type = 'set';
-    } else {
-        $update = "UPDATE `$table` SET `clicks` = clicks + 1 WHERE `keyword` = :keyword";
-        $values = [ 'keyword' => $keyword ];
-        $update_type = 'increment';
-    }
+    $table = \YOURLS\Database\TableRegistry::get('url');
 
     $ydb = yourls_get_db('write-update_clicks');
 
+    $qb = $ydb->create_query_builder()
+              ->update($table)
+              ->where('`keyword` = :keyword')
+              ->setParameter('keyword', $keyword);
+
+    if ( $clicks !== false && is_int( $clicks ) && $clicks >= 0 ) {
+        $qb->set('`clicks`', ':clicks')->setParameter('clicks', $clicks);
+        $update_type = 'set';
+    } else {
+        $qb->set('`clicks`', 'clicks + 1');
+        $update_type = 'increment';
+    }
+
     // Try and update click count. An error probably means a concurrency problem : just skip the update
     try {
-        $result = $ydb->fetchAffected($update, $values);
+        $result = $ydb->fetch_from('fetchAffected', $qb);
     } catch (Exception $e) {
         $result = 0;
     }
@@ -233,8 +237,19 @@ function yourls_get_stats($filter = 'top', $limit = 10, $start = 0) {
     $start = intval( $start );
     if ( $limit > 0 ) {
 
-        $table_url = YOURLS_DB_TABLE_URL;
-        $results = yourls_get_db('read-get_stats')->fetchObjects( "SELECT * FROM `$table_url` WHERE 1=1 ORDER BY $sort_by $sort_order LIMIT $start, $limit;" );
+        $table_url = \YOURLS\Database\TableRegistry::get('url');
+        $ydb = yourls_get_db('read-get_stats');
+
+        // $sort_by and $sort_order are literals set by the switch above, never user input
+        $qb = $ydb->create_query_builder()
+                  ->select('*')
+                  ->from($table_url)
+                  ->where('1=1')
+                  ->orderBy($sort_by, $sort_order)
+                  ->setFirstResult($start)
+                  ->setMaxResults($limit);
+
+        $results = $ydb->fetch_from('fetchObjects', $qb);
 
         $return = [];
         $i = 1;
@@ -269,9 +284,19 @@ function yourls_get_stats($filter = 'top', $limit = 10, $start = 0) {
  * @return array
  */
 function yourls_get_db_stats( $where = [ 'sql' => '', 'binds' => [] ] ) {
-    $table_url = YOURLS_DB_TABLE_URL;
+    $table_url = \YOURLS\Database\TableRegistry::get('url');
+    $ydb = yourls_get_db('read-get_db_stats');
 
-    $totals = yourls_get_db('read-get_db_stats')->fetchObject( "SELECT COUNT(keyword) as count, SUM(clicks) as sum FROM `$table_url` WHERE 1=1 " . $where['sql'] , $where['binds'] );
+    /* $where['sql'] is a raw SQL fragment built by admin/index.php and filtered through
+     * 'admin_list_where': it comes with its own ':placeholders', bound from $where['binds'].
+     */
+    $qb = $ydb->create_query_builder()
+              ->select('COUNT(keyword) as count', 'SUM(clicks) as sum')
+              ->from($table_url)
+              ->where('1=1 ' . $where['sql'])
+              ->setParameters($where['binds']);
+
+    $totals = $ydb->fetch_from('fetchObject', $qb);
     $return = [ 'total_links' => (int)$totals->count, 'total_clicks' => (int)$totals->sum ];
 
     return yourls_apply_filter( 'get_db_stats', $return, $where );
@@ -585,7 +610,7 @@ function yourls_log_redirect( $keyword ) {
         return true;
     }
 
-    $table = YOURLS_DB_TABLE_LOG;
+    $table = \YOURLS\Database\TableRegistry::get('log');
     $ip = yourls_get_IP();
     $binds = [
         'now' => date( 'Y-m-d H:i:s' ),
@@ -601,7 +626,18 @@ function yourls_log_redirect( $keyword ) {
 
     // Try and log. An error probably means a concurrency problem : just skip the logging
     try {
-        $result = yourls_get_db('write-log_redirect')->fetchAffected("INSERT INTO `$table` (click_time, shorturl, referrer, user_agent, ip_address, country_code) VALUES (:now, :keyword, :referrer, :ua, :ip, :location)", $binds );
+        $ydb = yourls_get_db('write-log_redirect');
+        $result = $ydb->fetch_from('fetchAffected', $ydb->create_query_builder()
+            ->insert($table)
+            ->values([
+                '`click_time`'   => ':now',
+                '`shorturl`'     => ':keyword',
+                '`referrer`'     => ':referrer',
+                '`user_agent`'   => ':ua',
+                '`ip_address`'   => ':ip',
+                '`country_code`' => ':location',
+            ])
+            ->setParameters($binds));
     } catch (Exception $e) {
         $result = 0;
     }
@@ -768,8 +804,15 @@ function yourls_check_IP_flood(string $ip = '' ): mixed {
 
     yourls_do_action( 'check_ip_flood', $ip );
 
-    $table = YOURLS_DB_TABLE_URL;
-    $lasttime = yourls_get_db('read-check_ip_flood')->fetchValue( "SELECT `timestamp` FROM $table WHERE `ip` = :ip ORDER BY `timestamp` DESC LIMIT 1", [ 'ip' => $ip ] );
+    $table = \YOURLS\Database\TableRegistry::get('url');
+    $ydb = yourls_get_db('read-check_ip_flood');
+    $lasttime = $ydb->fetch_from('fetchValue', $ydb->create_query_builder()
+        ->select('`timestamp`')
+        ->from($table)
+        ->where('`ip` = :ip')
+        ->orderBy('`timestamp`', 'DESC')
+        ->setMaxResults(1)
+        ->setParameter('ip', $ip));
     if( $lasttime ) {
         $now = date( 'U' );
         $then = date( 'U', strtotime( $lasttime ) );
