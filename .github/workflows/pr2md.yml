@@ -1,0 +1,12 @@
+- name: Action PR to Md
+  uses: ryohidaka/action-pr-to-md@v1
+  with:
+    user_name: "user_name"
+    is_exclude_owner_repos: false
+    states: "open, merged, closed"
+    excluded_repos: "excluded_repo1, excluded_repo2"
+    since: "2020-01-01"
+    until: "2023-01-01"
+    repo_template: "- {REPO}\n{ITEMS}"
+    item_template: "\t- [#{number} {title}]({url})"
+    output_file_path: "output.md"
