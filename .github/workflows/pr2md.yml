@@ -3,7 +3,7 @@ name: PR to Markdown
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-  workflow_dispatch: # Îți permite să o rulezi și manual din tab-ul Actions
+  workflow_dispatch:
 
 jobs:
   convert-pr:
@@ -22,3 +22,6 @@ jobs:
         with:
           user_name: 'catalin87'
           output_file_path: 'output.md'
+          states: 'open, merged, closed'
+          since: '2024-01-01' # Pune o dată de la care ai început să ai PR-uri
+          included_repos: 'YOURLS' # Opțional: Forțează să caute doar în acest repo pentru test
